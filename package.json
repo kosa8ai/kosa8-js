@@ -1,0 +1,23 @@
+{
+  "name": "kosa8-js",
+  "private": true,
+  "description": "TypeScript packages for kosa8: @kosa8/sdk and @kosa8/ai-sdk-sandbox",
+  "license": "MIT",
+  "workspaces": [
+    "packages/sdk",
+    "packages/ai-sdk-sandbox"
+  ],
+  "scripts": {
+    "build": "npm run build -w @kosa8/sdk && npm run build -w @kosa8/ai-sdk-sandbox",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm test --workspaces",
+    "test:integration": "vitest run --config integration/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsup": "8.5.0",
+    "tsx": "4.20.3",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

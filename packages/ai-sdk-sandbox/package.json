@@ -1,0 +1,70 @@
+{
+  "name": "@kosa8/ai-sdk-sandbox",
+  "version": "0.1.0",
+  "description": "kosa8 sandbox for the Vercel AI SDK 7: run an agent's commands and files in a local microVM, with egress allow-lists.",
+  "license": "MIT",
+  "author": "kosa8",
+  "homepage": "https://kosa8.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kosa8ai/kosa8-js.git",
+    "directory": "packages/ai-sdk-sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/kosa8ai/kosa8-js/issues"
+  },
+  "keywords": [
+    "kosa8",
+    "ai-sdk",
+    "vercel-ai-sdk",
+    "sandbox",
+    "microvm",
+    "harness",
+    "code-execution",
+    "ai-agents",
+    "egress"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@ai-sdk/harness": "^1.0.153",
+    "@ai-sdk/provider-utils": "^5.0.61",
+    "@kosa8/sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "ai": "7.0.142",
+    "zod": "^4.1.8"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}
