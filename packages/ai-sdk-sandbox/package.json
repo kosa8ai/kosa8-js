@@ -1,6 +1,6 @@
 {
   "name": "@kosa8/ai-sdk-sandbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "kosa8 sandbox for the Vercel AI SDK 7: run an agent's commands and files in a local microVM, with egress allow-lists.",
   "license": "MIT",
   "author": "kosa8",

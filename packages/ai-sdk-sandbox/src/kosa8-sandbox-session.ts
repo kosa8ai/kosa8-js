@@ -150,20 +150,30 @@ export class Kosa8SandboxSession implements SandboxSession {
     };
 
     const exit: Promise<{ exitCode: number }> = (async () => {
-      let r = await iter.next();
-      while (!r.done) {
-        const f = r.value;
-        if (f.done) {
-          if (f.error) throw new Kosa8StreamError(f.error, { stdout: '', stderr: '' }, { daemonMessage: f.error });
-          return { exitCode: typeof f.exit === 'number' ? f.exit : 0 };
+      try {
+        let r = await iter.next();
+        while (!r.done) {
+          const f = r.value;
+          if (f.done) {
+            if (f.error) throw new Kosa8StreamError(f.error, { stdout: '', stderr: '' }, { daemonMessage: f.error });
+            return { exitCode: typeof f.exit === 'number' ? f.exit : 0 };
+          }
+          if (f.data) {
+            if (f.stream === 'stderr') push(errCtl, f.data);
+            else if (f.stream !== 'status') push(outCtl, f.data);
+          }
+          r = await iter.next();
         }
-        if (f.data) {
-          if (f.stream === 'stderr') push(errCtl, f.data);
-          else if (f.stream !== 'status') push(outCtl, f.data);
-        }
-        r = await iter.next();
+        throw new Kosa8StreamError('exec stream ended without an exit code', { stdout: '', stderr: '' });
+      } finally {
+        // Leaving the loop at the done frame left the frame generator
+        // suspended, so its finally never ran and the HTTP response was never
+        // destroyed: the socket stayed open and Node did not exit. Closing
+        // the generator destroys the response on every way out — the done
+        // frame, an error frame, a stream error, and so after kill() and an
+        // abort, which end in one of those.
+        await iter.return?.(undefined).catch(() => undefined);
       }
-      throw new Kosa8StreamError('exec stream ended without an exit code', { stdout: '', stderr: '' });
     })();
     exit.then(
       () => {
@@ -233,6 +243,8 @@ export class Kosa8SandboxSession implements SandboxSession {
           }
           const f = r.value;
           if (f.done) {
+            // As in spawn: close the generator so the response is destroyed.
+            await iter.return?.(undefined).catch(() => undefined);
             if (f.error) ctl.error(new Error(`reading ${abs}: ${f.error}`));
             else if (f.exit) ctl.error(new Error(`reading ${abs}: ${stderr.trim() || `exit ${f.exit}`}`));
             else ctl.close();
