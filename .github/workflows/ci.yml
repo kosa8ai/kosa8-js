@@ -18,6 +18,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # @kosa8/ai-sdk-sandbox type-checks against @kosa8/sdk's built types.
+      - run: npm run build
       - run: npm run typecheck
       - name: "@kosa8/sdk"
         run: npm test -w @kosa8/sdk
@@ -26,4 +28,3 @@ jobs:
       - name: "@kosa8/ai-sdk-sandbox"
         if: runner.os != 'Windows'
         run: npm test -w @kosa8/ai-sdk-sandbox
-      - run: npm run build
