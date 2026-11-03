@@ -8,7 +8,7 @@ kosa8 Cloud.
 - `cloud.sandboxes.create`, `list` and `get` return a `CloudSandbox` with `exec`, `sleep`, `wake`, `refresh` and `delete`.
 - `cloud.functions`: `deploy`, `list`, `get`, `delete`, `invoke` and `map`.
 - `cloud.me()` and `cloud.usage()`.
-- Errors: every error has `code`, the cloud's stable error code. New `Kosa8PaymentRequiredError` (402) and `Kosa8RateLimitError` (429).
+- Errors: every error has `code`, the cloud's stable error code. New `Kosa8PaymentRequiredError` (402) and `Kosa8RateLimitError` (429), and `Kosa8TimeoutError` (a `Kosa8ConnectionError`) for a call past its timeout.
 
 ## 0.2.0
 

@@ -6,6 +6,7 @@ import {
   Kosa8NotFoundError,
   Kosa8PaymentRequiredError,
   Kosa8RateLimitError,
+  Kosa8TimeoutError,
 } from '../src/index.js';
 
 const KEY = 'k8c_live_testkey';
@@ -122,5 +123,15 @@ describe('Kosa8Cloud', () => {
     const e = await cloud.me().catch((x) => x);
     expect(e).toBeInstanceOf(Kosa8ConnectionError);
     expect(e.message).toMatch(/could not reach kosa8 Cloud/);
+  });
+
+  it('reports a cloud that does not answer in time as a timeout', async () => {
+    const f = ((_u: string, init: RequestInit) => new Promise((_res, rej) => {
+      init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+    })) as unknown as typeof fetch;
+    const cloud = new Kosa8Cloud({ apiKey: KEY, env: {}, fetch: f, timeoutMs: 20 });
+    const e = await cloud.me().catch((x) => x);
+    expect(e).toBeInstanceOf(Kosa8TimeoutError);
+    expect(e).toBeInstanceOf(Kosa8ConnectionError);
   });
 });

@@ -92,6 +92,12 @@ export class Kosa8Error extends Error {
 /** The daemon could not be reached (no socket, connection refused, ...). */
 export class Kosa8ConnectionError extends Kosa8Error {}
 
+/**
+ * A call took longer than its timeout. A connection error too, so code that
+ * catches Kosa8ConnectionError keeps catching it.
+ */
+export class Kosa8TimeoutError extends Kosa8ConnectionError {}
+
 /** The daemon answered with an HTTP error. */
 export class Kosa8ApiError extends Kosa8Error {}
 

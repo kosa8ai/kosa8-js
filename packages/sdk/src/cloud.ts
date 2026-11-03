@@ -19,7 +19,7 @@
  * `code` (for example `payment_required`, `quota_exceeded`).
  */
 
-import { Kosa8ConnectionError, Kosa8Error, errorFromResponse } from './errors.js';
+import { Kosa8ConnectionError, Kosa8Error, Kosa8TimeoutError, errorFromResponse } from './errors.js';
 
 export const DEFAULT_CLOUD_URL = 'https://api.kosa8.cloud';
 export const CLOUD_KEY_PREFIX = 'k8c_live_';
@@ -182,8 +182,10 @@ export class Kosa8Cloud {
         signal: ctl.signal,
       });
     } catch (e) {
-      const why = ctl.signal.aborted ? `timed out after ${this.timeoutMs} ms` : String((e as Error)?.message ?? e);
-      throw new Kosa8ConnectionError(`could not reach kosa8 Cloud at ${this.baseUrl}: ${why}`, { method, path, cause: e });
+      if (ctl.signal.aborted) {
+        throw new Kosa8TimeoutError(`kosa8 Cloud did not answer within ${this.timeoutMs} ms`, { method, path, cause: e });
+      }
+      throw new Kosa8ConnectionError(`could not reach kosa8 Cloud at ${this.baseUrl}: ${String((e as Error)?.message ?? e)}`, { method, path, cause: e });
     } finally {
       clearTimeout(timer);
     }

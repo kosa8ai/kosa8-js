@@ -45,6 +45,7 @@ export type { CheckpointStore } from './checkpoints.js';
 export {
   Kosa8Error,
   Kosa8ConnectionError,
+  Kosa8TimeoutError,
   Kosa8ApiError,
   Kosa8BadRequestError,
   Kosa8AuthError,
