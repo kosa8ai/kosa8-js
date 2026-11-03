@@ -189,6 +189,36 @@ console.log((await sb.shell('echo $FOO; pwd')).stdout); // "bar\n/tmp\n"
 
 The daemon has no checkpoint endpoint. Checkpoints are bookkeeping kept on the client side over snapshots, exactly as in the kosa8 CLI and MCP server. By default they go in the CLI's own store, so `kosa8 rewind` sees checkpoints you took with the SDK, and the SDK sees the CLI's. A rewind deletes the sandbox and restores the checkpoint under the same name, and checkpoints taken after the target are discarded.
 
+## kosa8 Cloud
+
+The same client shape, against kosa8 Cloud instead of the local daemon. Make
+an API key in the cloud dashboard and set `KOSA8_API_KEY`.
+
+```ts
+import { Kosa8Cloud, Kosa8PaymentRequiredError } from '@kosa8/sdk';
+
+const cloud = new Kosa8Cloud(); // or new Kosa8Cloud({ apiKey: 'k8c_live_…' })
+
+const box = await cloud.sandboxes.create({ template: 'python', sleepAfterS: 600 });
+const r = await box.exec(['python3', '-c', 'print(6 * 7)']);
+console.log(r.exitCode, r.stdout); // 0 "42\n"
+await box.sleep();   // costs only snapshot storage while asleep
+await box.exec('ls /workspace'); // wakes it, files and all
+await box.delete();
+
+await cloud.functions.deploy('hello', {
+  runtime: 'python3.12',
+  code: 'def handler(event):\n    return {"hello": event.get("name", "world")}\n',
+});
+const out = await cloud.functions.invoke('hello', { name: 'kosa8' });
+console.log(out.ok, out.result); // true { hello: 'kosa8' }
+```
+
+A new organization runs nothing until a payment method is on file; until
+then creating a sandbox throws `Kosa8PaymentRequiredError` (`code`
+`payment_required`), whose message says what to do. Every error from the
+cloud carries its stable `code`.
+
 ## Errors
 
 Every error extends `Kosa8Error`. An error from the daemon carries `status`, `daemonMessage` (the daemon's `error`, verbatim) and `remediation` (what to do), and its `message` is `"<error> (<remediation>)"`.

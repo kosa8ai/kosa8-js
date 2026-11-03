@@ -55,7 +55,20 @@ export {
   Kosa8UnsupportedError,
   Kosa8StreamError,
   Kosa8CheckpointError,
+  Kosa8PaymentRequiredError,
+  Kosa8RateLimitError,
   errorFromResponse,
 } from './errors.js';
 export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule } from './errors.js';
 export type * from './types.js';
+export { Kosa8Cloud, CloudSandbox, CloudSandboxes, CloudFunctions, DEFAULT_CLOUD_URL, CLOUD_KEY_PREFIX } from './cloud.js';
+export type {
+  Kosa8CloudOptions,
+  CloudSandboxInfo,
+  CloudCreateOptions,
+  CloudExecOptions,
+  CloudExecResult,
+  CloudInvokeResult,
+  CloudInvocation,
+  CloudFunctionSpec,
+} from './cloud.js';

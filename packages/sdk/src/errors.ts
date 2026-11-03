@@ -57,6 +57,8 @@ export interface Kosa8ErrorOptions {
   path?: string;
   body?: unknown;
   cause?: unknown;
+  /** kosa8 Cloud's stable error code, such as payment_required. */
+  code?: string;
 }
 
 /** Base class of every error this SDK throws. */
@@ -71,6 +73,8 @@ export class Kosa8Error extends Error {
   readonly path?: string;
   /** The decoded response body, when there was one. */
   readonly body?: unknown;
+  /** kosa8 Cloud's stable error code (payment_required, quota_exceeded, ...). */
+  readonly code?: string;
 
   constructor(message: string, options: Kosa8ErrorOptions = {}) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
@@ -81,6 +85,7 @@ export class Kosa8Error extends Error {
     this.method = options.method;
     this.path = options.path;
     this.body = options.body;
+    this.code = options.code;
   }
 }
 
@@ -135,6 +140,12 @@ export class Kosa8StreamError extends Kosa8Error {
   }
 }
 
+/** kosa8 Cloud refused new work until a payment method is on file (402). */
+export class Kosa8PaymentRequiredError extends Kosa8ApiError {}
+
+/** Too many requests or a quota reached (429). */
+export class Kosa8RateLimitError extends Kosa8ApiError {}
+
 /** A client-side checkpoint operation failed (no checkpoint, bad name, ...). */
 export class Kosa8CheckpointError extends Kosa8Error {}
 
@@ -150,7 +161,7 @@ function isRefusal(v: unknown): v is ApprovalRefusal {
 export function errorFromResponse(
   status: number,
   body: unknown,
-  ctx: { method?: string; path?: string } = {},
+  ctx: { method?: string; path?: string; code?: string } = {},
 ): Kosa8ApiError {
   let daemonMessage: string | undefined;
   let remediation: string | undefined;
@@ -179,8 +190,12 @@ export function errorFromResponse(
       return new Kosa8PolicyError(message, opts);
     case 404:
       return new Kosa8NotFoundError(message, opts);
+    case 402:
+      return new Kosa8PaymentRequiredError(message, opts);
     case 409:
       return new Kosa8ConflictError(message, opts);
+    case 429:
+      return new Kosa8RateLimitError(message, opts);
     case 501:
       return new Kosa8UnsupportedError(message, opts);
     default:
