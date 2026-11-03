@@ -293,7 +293,7 @@ function decodeFrame(line: string): Frame {
   return out;
 }
 
-async function readAll(stream: http.IncomingMessage, signal?: AbortSignal): Promise<Buffer> {
+export async function readAll(stream: http.IncomingMessage, signal?: AbortSignal): Promise<Buffer> {
   const chunks: Buffer[] = [];
   try {
     for await (const c of stream) chunks.push(c as Buffer);

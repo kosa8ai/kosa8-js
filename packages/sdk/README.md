@@ -1,6 +1,6 @@
 # @kosa8/sdk
 
-Typed TypeScript client for the [kosa8](https://kosa8.com) native API. kosa8 gives every AI agent its own sealed machine: a real microVM with its own kernel, with the network closed except for the hosts on an allow-list you write. This package talks to the kosa8 daemon over its unix socket. It covers sandboxes, running and exec'ing commands, checkpoint and rewind, fork, explore, and snapshots.
+Typed TypeScript client for the [kosa8](https://kosa8.com) native API. kosa8 gives every AI agent its own sealed machine: a real microVM with its own kernel, with the network closed except for the hosts on an allow-list you write. This package talks to the kosa8 daemon over its unix socket. It covers sandboxes, running and exec'ing commands, the sandbox toolbox (code, files, git, shell sessions, terminals, previews, lifecycle, templates), checkpoint and rewind, fork, explore, and snapshots.
 
 - No runtime dependencies. It uses Node's own `http` with `socketPath`.
 - ESM and CommonJS builds with `.d.ts` types. Node 18 or later.
@@ -99,7 +99,7 @@ All methods return promises. Every method takes `{ approval?, signal? }` as its 
 
 | method | endpoint |
 | --- | --- |
-| `createSandbox({ name?, cpus?, memMb?, diskGb?, mounts?, egress?, egressAllow?, capture?, labels?, broker? })` → `{ sandbox, boot_ms, broker? }` | `POST /kosa8/v1/sandboxes` |
+| `createSandbox({ name?, cpus?, memMb?, diskGb?, mounts?, egress?, egressAllow?, capture?, labels?, broker?, autoStopMin?, ttlMin?, autoDeleteMin?, ephemeral?, template? })` → `{ sandbox, boot_ms, broker? }` | `POST /kosa8/v1/sandboxes` |
 | `listSandboxes()` → `Sandbox[]` | `GET /kosa8/v1/sandboxes` |
 | `getSandbox(idOrName)` → `Sandbox \| undefined` | (from the list) |
 | `startSandbox(id)` | `POST /kosa8/v1/sandboxes/{id}/up` |
@@ -109,7 +109,7 @@ All methods return promises. Every method takes `{ approval?, signal? }` as its 
 | `sandboxImages(id)`, `sandboxContainers(id)` | `GET …/images`, `GET …/containers` |
 | `sandboxEgress(id)` → the policy enforced, and pass/deny counters | `GET …/egress` |
 
-`egress` takes `'deny'`, `'any'`, `'fakenet'`, `'allow:a.com,*.b.com,10.0.0.0/8'` or `{ allow: [...] }`. `egressAllow: [...]` is shorthand for the allow-list. If you set neither, the daemon applies the org policy's default egress, or `any` when there is none. `broker` puts the sandbox behind kosa8's egress broker: real credentials stay on the host and the sandbox holds only placeholders (returned in `broker.placeholders`).
+`egress` takes `'deny'`, `'any'`, `'fakenet'`, `'allow:a.com,*.b.com,10.0.0.0/8'` or `{ allow: [...] }`. `egressAllow: [...]` is shorthand for the allow-list. If you set neither, the daemon applies the org policy's default egress, or `any` when there is none. `broker` puts the sandbox behind kosa8's egress broker: real credentials stay on the host and the sandbox holds only placeholders (returned in `broker.placeholders`). `autoStopMin` stops the sandbox after that many idle minutes, `ttlMin` that long after it was created, `autoDeleteMin` deletes it once it has been stopped that long, and `ephemeral` deletes it whenever it stops. `template` starts it with a template's image (see Toolbox).
 
 ### Run and exec
 
@@ -124,6 +124,47 @@ All methods return promises. Every method takes `{ approval?, signal? }` as its 
 | `attach(id, container)` → `ExecResult` | `POST …/containers/{cid}/attach` |
 
 `ExecResult` is `{ exitCode, stdout, stderr, stdoutBytes, stderrBytes }`. A non-zero exit code is a result, not an error.
+
+### Toolbox
+
+The toolbox is for agents that want to work in a sandbox the way they work on a laptop: run a snippet, read and write files, use git, keep a shell. None of it needs an image pulled first; the daemon picks one (or the sandbox template's).
+
+```ts
+const sb = kosa8.sandbox('demo');
+
+const r = await sb.runCode('print(6 * 7)');            // python by default
+console.log(r.ok, r.stdout, r.artifacts);              // matplotlib charts come back as PNG bytes
+
+await sb.writeFile('/workspace/app.py', 'print("hi")\n');
+console.log(await sb.readText('/workspace/app.py'));
+
+await sb.gitClone('https://github.com/octocat/Hello-World.git', { path: 'hw', depth: 1 });
+await sb.gitCommit('hw', 'my change', { authorName: 'Agent', authorEmail: 'agent@example.com' });
+
+await sb.shell('cd /tmp && export FOO=bar');           // the session "main" is made on first use
+console.log((await sb.shell('echo $FOO; pwd')).stdout); // "bar\n/tmp\n"
+```
+
+| method | endpoint |
+| --- | --- |
+| `runCode(id, code, { language?, image?, env?, timeoutS? })` → `CodeResult` | `POST …/code` |
+| `listFiles(id, path?)`, `statFile(id, path)` → `FileInfo` | `GET …/files`, `GET …/files/stat` |
+| `readFile(id, path)` → `Buffer`, `readText(id, path)` → `string` | `GET …/files/content` |
+| `writeFile(id, path, data, { mode? })` | `PUT …/files/content` (bytes, a string or an async iterable) |
+| `deleteFile(id, path, { recursive? })`, `makeDir(id, path)`, `moveFile(id, from, to)` | `DELETE …/files`, `POST …/files/mkdir`, `POST …/files/move` |
+| `git(id, op, fields)` → `GitResult` | `POST …/git` (`clone`, `status`, `add`, `commit`, `push`, `pull`, `checkout`, `branches`, `log`, `diff`) |
+| `gitClone(id, url, { path?, depth?, … })`, `gitStatus(id, path)`, `gitCommit(id, path, message, { addAll? })` | `POST …/git` (`gitCommit` stages everything first) |
+| `createSession(id, name?, { image?, env? })`, `listSessions(id)`, `deleteSession(id, name)` | `POST/GET …/sessions`, `DELETE …/sessions/{name}` |
+| `sessionExec(id, session, command, { timeoutS? })` → `ShellResult` | `POST …/sessions/{name}/exec` |
+| `shell(id, command, { session?, timeoutS? })` → `ShellResult` | as `sessionExec`, making the session (default `main`) on first use |
+| `startPty(id, { image?, command?, cols?, rows?, env? })` → container id, `resizePty(id, cid, cols, rows)` | `POST …/pty`, `POST …/containers/{cid}/resize` |
+| `createPreview(id, port, { session?, container?, expiresInS? })` → `{ url, token, expires_at, … }` | `POST …/previews` |
+| `revokePreviews()` | `POST /kosa8/v1/previews/rotate` (ends every preview link) |
+| `setLifecycle(id, { autoStopMin?, ttlMin?, autoDeleteMin?, ephemeral? })` → `Sandbox` | `POST …/lifecycle` (left out keeps its value, 0 turns it off) |
+| `listTemplates()`, `deleteTemplate(name)` | `GET /kosa8/v1/templates`, `DELETE /kosa8/v1/templates/{name}` |
+| `buildTemplate(name, contextDir?, { dockerfile?, buildArgs?, egress?, replace?, onOutput? })` → final frame | `POST /kosa8/v1/templates` |
+
+`CodeResult` is `{ ok, exitCode, stdout, stderr, language, image, artifacts, durationMs, timedOut, truncated }` and `ShellResult` is `{ ok, exitCode, stdout, stderr, cwd, durationMs, timedOut, truncated }`. As with `run`, a non-zero exit code is a result, and so is a git failure (`ok: false`). Only a refusal throws. `buildTemplate` packs the context directory as a tar, leaving out what `.dockerignore` names (paths and their prefixes), builds it in a throwaway sandbox, and keeps the image, so that `createSandbox({ template })` starts from it. A failed build throws `Kosa8StreamError`. The sandbox handle has every per-sandbox toolbox method, with the sandbox id already bound (`sb.runCode(code)`, `sb.sessions()`, …).
 
 ### Snapshots, fork, explore
 
@@ -162,7 +203,7 @@ Every error extends `Kosa8Error`. An error from the daemon carries `status`, `da
 | `Kosa8NotFoundError` | 404 |
 | `Kosa8ConflictError` | 409: for example the sandbox exists but is stopped, or a snapshot id is already taken |
 | `Kosa8UnsupportedError` | 501: no microVM backend on this platform |
-| `Kosa8StreamError` | a run or exec ended with an error frame (output so far in `stdout`/`stderr`) |
+| `Kosa8StreamError` | a run, exec or template build ended with an error frame (output so far in `stdout`/`stderr`), or a file read was cut short |
 | `Kosa8CheckpointError` | no checkpoint to rewind to, or an invalid name |
 
 When an action needs approval, a human opens a request (`error.approval.request_command`), the approvers sign it, and you repeat the call with the id:

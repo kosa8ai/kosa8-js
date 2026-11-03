@@ -8,6 +8,8 @@ export interface Recorded {
   url: string;
   headers: http.IncomingHttpHeaders;
   body: string;
+  /** The body's bytes, for binary uploads. */
+  raw: Buffer;
 }
 
 export type Handler = (
@@ -29,11 +31,13 @@ export class MockDaemon {
     this.server = http.createServer(async (req, res) => {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
+      const raw = Buffer.concat(chunks);
       const rec: Recorded = {
         method: req.method ?? '',
         url: req.url ?? '',
         headers: req.headers,
-        body: Buffer.concat(chunks).toString('utf8'),
+        body: raw.toString('utf8'),
+        raw,
       };
       this.requests.push(rec);
       const p = rec.url.split('?')[0]!;
@@ -74,7 +78,7 @@ export function json(res: http.ServerResponse, code: number, body: unknown): voi
 /** Write NDJSON frames as the daemon does (data base64-encoded). */
 export function frames(
   res: http.ServerResponse,
-  list: { stream?: string; data?: string | Buffer; done?: boolean; ok?: boolean; exit?: number; error?: string }[],
+  list: { stream?: string; data?: string | Buffer; done?: boolean; ok?: boolean; exit?: number; error?: string; image?: string }[],
 ): void {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
   for (const f of list) {

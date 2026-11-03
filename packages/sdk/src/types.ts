@@ -95,6 +95,25 @@ export interface Sandbox {
   ip?: string;
   labels?: Record<string, string>;
   broker?: BrokerInfo;
+  /** When it stops or is deleted by itself (pkg/sandbox Lifecycle). */
+  lifecycle?: Lifecycle;
+  /** When it last stopped (RFC 3339). */
+  stopped_at?: string;
+}
+
+/**
+ * When a sandbox stops or goes away by itself (pkg/sandbox Lifecycle).
+ * A field left out (or 0) is off.
+ */
+export interface Lifecycle {
+  /** Stop after this many minutes without use. */
+  auto_stop_min?: number;
+  /** Delete once it has been stopped this many minutes. */
+  auto_delete_min?: number;
+  /** Stop this many minutes after it was created, in use or not. */
+  ttl_min?: number;
+  /** Delete instead of stopping, disk and all. */
+  ephemeral?: boolean;
 }
 
 /** A saved sandbox state (pkg/sandbox Snapshot). */
@@ -266,4 +285,137 @@ export interface ExploreResult {
   /** The fastest successful branch, or "" when every branch failed. */
   winner: string;
   removed: number;
+}
+
+// --- toolbox -----------------------------------------------------------------
+
+/** A file a code run produced: today, a chart as a PNG. */
+export interface CodeArtifact {
+  /** Media type, e.g. `image/png`. */
+  type: string;
+  name: string;
+  data: Buffer;
+}
+
+/** The outcome of `runCode`. A non-zero `exitCode` is a result, not an error. */
+export interface CodeResult {
+  /** `exitCode === 0` and not timed out. */
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  language: string;
+  image: string;
+  artifacts: CodeArtifact[];
+  durationMs: number;
+  timedOut: boolean;
+  /** Output was cut at the daemon's limit. */
+  truncated: boolean;
+}
+
+/** The outcome of one command in a shell session. `cwd` is where the shell is now. */
+export interface ShellResult {
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  cwd: string;
+  durationMs: number;
+  timedOut: boolean;
+  truncated: boolean;
+}
+
+/** A file or folder in the sandbox workspace (pkg/engine FileInfo). */
+export interface FileInfo {
+  name: string;
+  path: string;
+  /** file | dir | symlink | other */
+  type: string;
+  size: number;
+  /** Permission bits. */
+  mode: number;
+  mod_time: string;
+  /** A symlink's target. */
+  link?: string;
+}
+
+/** One changed path in `git status`. */
+export interface GitFileStatus {
+  path: string;
+  /** A rename's old path. */
+  from?: string;
+  index: string;
+  worktree: string;
+}
+
+export interface GitStatus {
+  branch: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  files: GitFileStatus[];
+}
+
+export interface GitCommit {
+  hash: string;
+  author_name: string;
+  author_email: string;
+  date: string;
+  subject: string;
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
+}
+
+/** The git operations the daemon runs (POST …/git). */
+export type GitOp = 'clone' | 'status' | 'add' | 'commit' | 'push' | 'pull' | 'checkout' | 'branches' | 'log' | 'diff';
+
+/**
+ * The outcome of a git operation. A git failure is `ok: false`, not an error;
+ * `status`, `log` or `branches` are filled for those ops.
+ */
+export interface GitResult {
+  op: string;
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** The repository, in the workspace. */
+  path: string;
+  status?: GitStatus;
+  log?: GitCommit[];
+  branches?: GitBranch[];
+}
+
+/** A shell session (POST/GET …/sessions). */
+export interface SessionInfo {
+  name: string;
+  /** The session's container id. */
+  id: string;
+  image: string;
+  status: string;
+}
+
+/** POST …/previews answer: a signed link to a port in the sandbox. */
+export interface Preview {
+  url: string;
+  token: string;
+  /** RFC 3339. */
+  expires_at: string;
+  container: string;
+  port: number;
+  /** Where the daemon's preview listener is. */
+  listen: string;
+}
+
+/** A sandbox template (GET /kosa8/v1/templates). */
+export interface Template {
+  name: string;
+  image: string;
+  size_bytes: number;
+  created: string;
+  dockerfile?: string;
 }
