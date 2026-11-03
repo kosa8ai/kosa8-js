@@ -15,6 +15,7 @@ import {
   Kosa8StreamError,
   MemoryCheckpointStore,
   resolveEndpoint,
+  Transport,
 } from '../src/index.js';
 import { MockDaemon, frames, json, sandbox } from './mock-daemon.js';
 
@@ -44,7 +45,7 @@ describe('status', () => {
     const c = new Kosa8Client({ socketPath: path.join(os.tmpdir(), 'nope-k8.sock'), env: {} });
     const err = await c.health().catch((e) => e);
     expect(err).toBeInstanceOf(Kosa8ConnectionError);
-    expect(err.message).toMatch(/daemon running/);
+    expect(err.message).toMatch(/daemon running|wsl setup/);
   });
 });
 
@@ -363,7 +364,7 @@ describe('file checkpoint store', () => {
       ['web-ckpt-4', 'go'],
       ['web-ckpt-5', 'sdk'],
     ]);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600); // POSIX modes
     await expect(c.checkpoint('../etc')).rejects.toThrow(/invalid sandbox name/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -371,7 +372,7 @@ describe('file checkpoint store', () => {
 
 describe('endpoint resolution (KOSA8_HOST rules of the CLI)', () => {
   it('defaults to the socket under $HOME/.kosa8', () => {
-    const e = resolveEndpoint({ env: {} });
+    const e = resolveEndpoint({ env: {}, workerFile: null });
     expect(e).toEqual({ kind: 'unix', socketPath: path.join(os.homedir(), '.kosa8', 'run', 'kosa8.sock') });
   });
   it('accepts tcp://, bare host:port and https://, sending KOSA8_TOKEN', () => {
@@ -391,5 +392,49 @@ describe('endpoint resolution (KOSA8_HOST rules of the CLI)', () => {
   it('takes unix:// as a socket and rejects unknown schemes', () => {
     expect(resolveEndpoint({ env: { KOSA8_HOST: 'unix:///tmp/x.sock' } })).toEqual({ kind: 'unix', socketPath: '/tmp/x.sock' });
     expect(() => resolveEndpoint({ env: { KOSA8_HOST: 'ftp://x' } })).toThrow(/not supported/);
+  });
+
+  describe('the saved worker connection (kosa8 wsl setup / kosa8 worker join)', () => {
+    let dir: string;
+    let file: string;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'k8w-'));
+      file = path.join(dir, 'worker.json');
+    });
+    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const save = (w: unknown) => fs.writeFileSync(file, typeof w === 'string' ? w : JSON.stringify(w));
+
+    it('is used when KOSA8_HOST is not set, with its token', () => {
+      save({ host: 'http://127.0.0.1:7428', token: 'saved', via: 'wsl', distro: 'Ubuntu' });
+      const e = resolveEndpoint({ env: {}, workerFile: file });
+      expect(e.kind === 'tcp' && e.url.href).toBe('http://127.0.0.1:7428/');
+      expect(e).toMatchObject({ token: 'saved' });
+      expect(new Transport({ env: {}, workerFile: file }).target).toBe('http://127.0.0.1:7428');
+    });
+    it('loses to KOSA8_HOST, and its token never goes there', () => {
+      save({ host: 'http://127.0.0.1:7428', token: 'saved' });
+      const e = resolveEndpoint({ env: { KOSA8_HOST: 'https://w.example.com' }, workerFile: file });
+      expect(e.kind === 'tcp' && e.url.host).toBe('w.example.com');
+      expect(e).toMatchObject({ token: undefined });
+    });
+    it('is skipped for an explicit socket, a malformed file or a blank host', () => {
+      save({ host: 'http://127.0.0.1:7428' });
+      expect(resolveEndpoint({ env: {}, workerFile: file, socketPath: '/s.sock' })).toEqual({ kind: 'unix', socketPath: '/s.sock' });
+      save('{not json');
+      expect(resolveEndpoint({ env: {}, workerFile: file }).kind).toBe('unix');
+      save({ host: '  ', token: 't' });
+      expect(resolveEndpoint({ env: {}, workerFile: file }).kind).toBe('unix');
+      expect(resolveEndpoint({ env: {}, workerFile: path.join(dir, 'missing.json') }).kind).toBe('unix');
+    });
+    it('allows plain http to a LAN worker only when it was paired with --insecure', () => {
+      save({ host: '10.1.2.3:7428', token: 't' });
+      expect(() => resolveEndpoint({ env: {}, workerFile: file })).toThrow(/plain http/);
+      save({ host: '10.1.2.3:7428', token: 't', insecure: true });
+      expect(resolveEndpoint({ env: {}, workerFile: file }).kind).toBe('tcp');
+    });
+    it('takes an explicit token over the saved one', () => {
+      save({ host: 'https://w.example.com', token: 'saved' });
+      expect(resolveEndpoint({ env: {}, workerFile: file, token: 'mine' })).toMatchObject({ token: 'mine' });
+    });
   });
 });

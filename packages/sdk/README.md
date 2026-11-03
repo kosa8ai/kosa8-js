@@ -83,9 +83,16 @@ All methods return promises. Every method takes `{ approval?, signal? }` as its 
 | `host` | `KOSA8_HOST` | remote worker: `https://…`, `tcp://host:port`, `host:port`, or `unix:///path.sock` |
 | `token` | `KOSA8_TOKEN` (with `KOSA8_HOST`) | bearer token for a remote worker |
 | `insecure` | `KOSA8_INSECURE=1` | allow plain http to a non-loopback host (refused by default, as in the CLI) |
+| `workerFile` | `$HOME/.kosa8/worker.json` | the CLI's saved worker connection, used when no `host`, `KOSA8_HOST` or `socketPath` is given; `null` reads none |
 | `actor` | `'tool'` | `X-Kosa8-Actor`: how the audit log files these requests (`human`, `agent`, `tool`) |
 | `agentToken` | `KOSA8_AGENT_TOKEN` | agent identity token, for policies that require one |
 | `checkpointStore` | `FileCheckpointStore` (`~/.kosa8/checkpoints.json`) | where checkpoint stacks live; `MemoryCheckpointStore` keeps them in memory |
+
+Where requests go, in order: `host` or `KOSA8_HOST`; else the connection the
+CLI saved (`kosa8 wsl setup` on Windows, where the engine runs in WSL2, or
+`kosa8 worker join` anywhere), with its token; else the local daemon's socket.
+So on Windows, once `kosa8 wsl setup` has run, `new Kosa8Client()` reaches the
+WSL2 engine with no configuration.
 
 ### Status
 

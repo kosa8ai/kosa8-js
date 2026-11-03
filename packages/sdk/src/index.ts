@@ -29,6 +29,7 @@ export {
   Transport,
   resolveEndpoint,
   defaultSocketPath,
+  defaultWorkerFile,
   APPROVAL_HEADER,
   ACTOR_HEADER,
   AGENT_TOKEN_HEADER,
