@@ -1,7 +1,17 @@
 import { CheckpointBook, FileCheckpointStore, type CheckpointStore } from './checkpoints.js';
-import { Kosa8Error, Kosa8StreamError } from './errors.js';
-import { Transport, type TransportOptions } from './transport.js';
+import { Kosa8Error, Kosa8NotFoundError, Kosa8StreamError, errorFromResponse } from './errors.js';
+import { tarContext } from './tar.js';
+import { Transport, readAll, type TransportOptions } from './transport.js';
 import type {
+  CodeResult,
+  FileInfo,
+  GitOp,
+  GitResult,
+  Lifecycle,
+  Preview,
+  SessionInfo,
+  ShellResult,
+  Template,
   BrokerSpec,
   CaptureSpec,
   Checkpoint,
@@ -66,6 +76,117 @@ export interface CreateSandboxOptions extends CallOptions {
   labels?: Record<string, string>;
   /** Put the sandbox behind an egress broker that adds credentials it never holds. */
   broker?: BrokerSpec;
+  /** Stop it after this many idle minutes. */
+  autoStopMin?: number;
+  /** Stop it this many minutes after creation, in use or not. */
+  ttlMin?: number;
+  /** Delete it once it has been stopped this many minutes. */
+  autoDeleteMin?: number;
+  /** Delete it (disk and all) whenever it stops. */
+  ephemeral?: boolean;
+  /** Start it with a template's image (see `buildTemplate`). */
+  template?: string;
+}
+
+export interface RunCodeOptions extends CallOptions {
+  /** `python` (default), `javascript` or `typescript`. */
+  language?: string;
+  /** Image to run in; the daemon picks one per language (or the sandbox template's). */
+  image?: string;
+  env?: Record<string, string>;
+  /** Time limit in seconds; past it the run is killed and `timedOut` set. */
+  timeoutS?: number;
+}
+
+export interface WriteFileOptions extends CallOptions {
+  /** Permission bits as octal text, e.g. `0755`. */
+  mode?: string;
+}
+
+/** The fields of a git op; which ones matter depends on the op. */
+export interface GitOptions extends CallOptions {
+  /** The repository, in the workspace. */
+  path?: string;
+  /** clone */
+  url?: string;
+  branch?: string;
+  /** clone --depth */
+  depth?: number;
+  /** push | pull; default origin */
+  remote?: string;
+  /** checkout -b */
+  create?: boolean;
+  /** add: these paths (default everything) */
+  files?: string[];
+  /** commit */
+  message?: string;
+  authorName?: string;
+  authorEmail?: string;
+  /** log: how many (default 20) */
+  n?: number;
+  /** diff --cached */
+  staged?: boolean;
+  /** For an https remote that needs credentials. */
+  username?: string;
+  token?: string;
+  /** Image git runs in. */
+  image?: string;
+}
+
+export interface GitCommitOptions extends Omit<GitOptions, 'path' | 'message'> {
+  /** Stage everything first (default true). */
+  addAll?: boolean;
+}
+
+export interface CreateSessionOptions extends CallOptions {
+  image?: string;
+  env?: Record<string, string>;
+}
+
+export interface SessionExecOptions extends CallOptions {
+  /** Time limit in seconds for this command. */
+  timeoutS?: number;
+}
+
+export interface ShellOptions extends SessionExecOptions {
+  /** Session to run in; made on first use. Default `main`. */
+  session?: string;
+}
+
+export interface StartPtyOptions extends CallOptions {
+  image?: string;
+  command?: string[];
+  cols?: number;
+  rows?: number;
+  env?: Record<string, string>;
+}
+
+export interface CreatePreviewOptions extends CallOptions {
+  /** Which session's container serves the port. */
+  session?: string;
+  /** Or which container. */
+  container?: string;
+  /** How long the link lives, in seconds. */
+  expiresInS?: number;
+}
+
+export interface SetLifecycleOptions extends CallOptions {
+  autoStopMin?: number;
+  autoDeleteMin?: number;
+  ttlMin?: number;
+  ephemeral?: boolean;
+}
+
+export interface BuildTemplateOptions extends CallOptions {
+  /** Dockerfile name inside the context (default `Dockerfile`). */
+  dockerfile?: string;
+  buildArgs?: Record<string, string>;
+  /** Network the build sandbox gets (daemon default `any`). */
+  egress?: EgressPolicy;
+  /** Build again over an existing template of the same name. */
+  replace?: boolean;
+  /** Build output as it arrives. */
+  onOutput?: (chunk: Buffer, stream: string) => void;
 }
 
 export interface RunOptions extends CallOptions {
@@ -167,6 +288,14 @@ function envList(env?: Record<string, string> | string[]): string[] | undefined 
 
 const enc = encodeURIComponent;
 
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+function num(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
 /**
  * Typed client for the kosa8 native API over the daemon's unix socket.
  *
@@ -229,6 +358,11 @@ export class Kosa8Client {
     if (options.capture) body.capture = options.capture;
     if (options.labels) body.labels = options.labels;
     if (options.broker) body.broker = options.broker;
+    if (options.autoStopMin) body.auto_stop_min = options.autoStopMin;
+    if (options.autoDeleteMin) body.auto_delete_min = options.autoDeleteMin;
+    if (options.ttlMin) body.ttl_min = options.ttlMin;
+    if (options.ephemeral) body.ephemeral = true;
+    if (options.template) body.template = options.template;
     return this.transport.json('POST', '/kosa8/v1/sandboxes', {
       body,
       approval: options.approval,
@@ -582,6 +716,352 @@ export class Kosa8Client {
     return { sandbox: restored.sandbox, checkpoint: target, dropped, restore_ms: restored.restore_ms };
   }
 
+  // --- toolbox: code -------------------------------------------------------------
+
+  /**
+   * POST /kosa8/v1/sandboxes/{id}/code: run a Python, JavaScript or
+   * TypeScript snippet. It starts in `/workspace`. Charts a Python snippet
+   * draws with matplotlib come back in `artifacts` as PNG bytes.
+   */
+  async runCode(id: string, code: string, opts: RunCodeOptions = {}): Promise<CodeResult> {
+    const body: Record<string, unknown> = { language: opts.language ?? 'python', code };
+    if (opts.image) body.image = opts.image;
+    if (opts.env && Object.keys(opts.env).length > 0) body.env = opts.env;
+    if (opts.timeoutS) body.timeout_s = opts.timeoutS;
+    const d = await this.transport.json<Record<string, unknown>>('POST', `/kosa8/v1/sandboxes/${enc(id)}/code`, {
+      body,
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+    const exitCode = num(d.exit);
+    const timedOut = d.timed_out === true;
+    const arts = Array.isArray(d.artifacts) ? (d.artifacts as Record<string, unknown>[]) : [];
+    return {
+      ok: exitCode === 0 && !timedOut,
+      exitCode,
+      stdout: str(d.stdout),
+      stderr: str(d.stderr),
+      language: str(d.language),
+      image: str(d.image),
+      artifacts: arts.map((a) => ({ type: str(a.type), name: str(a.name), data: Buffer.from(str(a.data), 'base64') })),
+      durationMs: num(d.duration_ms),
+      timedOut,
+      truncated: d.truncated === true,
+    };
+  }
+
+  // --- toolbox: files ------------------------------------------------------------
+
+  /** GET …/files: a folder in the workspace (default `/workspace`), or one entry. */
+  async listFiles(id: string, path = '/workspace', opts: CallOptions = {}): Promise<FileInfo[]> {
+    const d = await this.transport.json<{ files?: FileInfo[] }>('GET', `/kosa8/v1/sandboxes/${enc(id)}/files`, {
+      ...opts,
+      query: { path },
+    });
+    return d?.files ?? [];
+  }
+
+  /** GET …/files/stat: one entry, not following a symlink. */
+  statFile(id: string, path: string, opts: CallOptions = {}): Promise<FileInfo> {
+    return this.transport.json('GET', `/kosa8/v1/sandboxes/${enc(id)}/files/stat`, { ...opts, query: { path } });
+  }
+
+  /** GET …/files/content: a file's bytes. A body cut short is a Kosa8StreamError. */
+  async readFile(id: string, path: string, opts: CallOptions = {}): Promise<Buffer> {
+    const p = `/kosa8/v1/sandboxes/${enc(id)}/files/content`;
+    const res = await this.transport.raw('GET', p, { query: { path }, signal: opts.signal, approval: opts.approval });
+    let data: Buffer;
+    try {
+      data = await readAll(res.stream, opts.signal);
+    } catch (err) {
+      if (opts.signal?.aborted) throw err;
+      throw new Kosa8StreamError(`${path}: read cut short: ${err instanceof Error ? err.message : String(err)}`,
+        { stdout: '', stderr: '' }, { method: 'GET', path: p, cause: err });
+    }
+    if (res.status >= 400) {
+      const text = data.toString('utf8');
+      let body: unknown = text;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* keep text */
+      }
+      throw errorFromResponse(res.status, body, { method: 'GET', path: p });
+    }
+    const want = res.headers['content-length'];
+    if (want !== undefined && Number(want) !== data.length) {
+      throw new Kosa8StreamError(`${path}: got ${data.length} of ${want} bytes`, { stdout: '', stderr: '' }, { method: 'GET', path: p });
+    }
+    return data;
+  }
+
+  /** A file's contents as text (UTF-8 by default). */
+  async readText(id: string, path: string, opts: CallOptions & { encoding?: BufferEncoding } = {}): Promise<string> {
+    return (await this.readFile(id, path, opts)).toString(opts.encoding ?? 'utf8');
+  }
+
+  /** PUT …/files/content: replace a file, making its folders. Answers the new entry. */
+  writeFile(
+    id: string,
+    path: string,
+    data: Uint8Array | string | AsyncIterable<Uint8Array | string>,
+    opts: WriteFileOptions = {},
+  ): Promise<FileInfo> {
+    return this.transport.json('PUT', `/kosa8/v1/sandboxes/${enc(id)}/files/content`, {
+      query: { path, mode: opts.mode },
+      rawBody: data,
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+  }
+
+  /** DELETE …/files: a file, or with `recursive` a folder and everything in it. */
+  deleteFile(id: string, path: string, opts: CallOptions & { recursive?: boolean } = {}): Promise<{ removed: string }> {
+    return this.transport.json('DELETE', `/kosa8/v1/sandboxes/${enc(id)}/files`, {
+      query: { path, recursive: opts.recursive },
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+  }
+
+  /** POST …/files/mkdir: a folder, with its parents. */
+  makeDir(id: string, path: string, opts: CallOptions = {}): Promise<FileInfo> {
+    return this.transport.json('POST', `/kosa8/v1/sandboxes/${enc(id)}/files/mkdir`, { ...opts, body: { path } });
+  }
+
+  /** POST …/files/move: rename or move a file or folder. Answers the entry at `to`. */
+  moveFile(id: string, from: string, to: string, opts: CallOptions = {}): Promise<FileInfo> {
+    return this.transport.json('POST', `/kosa8/v1/sandboxes/${enc(id)}/files/move`, { ...opts, body: { from, to } });
+  }
+
+  // --- toolbox: git ----------------------------------------------------------------
+
+  /**
+   * POST …/git: one git operation in the workspace. A git failure resolves
+   * with `ok: false`; only a refusal (bad op, no sandbox, policy) throws.
+   */
+  async git(id: string, op: GitOp | (string & {}), opts: GitOptions = {}): Promise<GitResult> {
+    const { approval, signal, authorName, authorEmail, ...fields } = opts;
+    const body: Record<string, unknown> = { op };
+    for (const [k, v] of Object.entries(fields)) if (v !== undefined) body[k] = v;
+    if (authorName !== undefined) body.author_name = authorName;
+    if (authorEmail !== undefined) body.author_email = authorEmail;
+    const d = await this.transport.json<Record<string, unknown>>('POST', `/kosa8/v1/sandboxes/${enc(id)}/git`, {
+      body,
+      approval,
+      signal,
+    });
+    const out: GitResult = {
+      op: str(d.op) || op,
+      ok: d.ok === true,
+      exitCode: num(d.exit),
+      stdout: str(d.stdout),
+      stderr: str(d.stderr),
+      path: str(d.path),
+    };
+    if (d.status) out.status = d.status as GitResult['status'];
+    if (d.log) out.log = d.log as GitResult['log'];
+    if (d.branches) out.branches = d.branches as GitResult['branches'];
+    return out;
+  }
+
+  /** Clone `url` into the workspace (into `path`, else a folder named after the repo). */
+  gitClone(id: string, url: string, opts: GitOptions = {}): Promise<GitResult> {
+    return this.git(id, 'clone', { ...opts, url });
+  }
+
+  /** `git status` of the repository at `path`, parsed into `status`. */
+  gitStatus(id: string, path: string, opts: GitOptions = {}): Promise<GitResult> {
+    return this.git(id, 'status', { ...opts, path });
+  }
+
+  /** Stage everything (unless `addAll: false`) and commit. A failed add is returned as is. */
+  async gitCommit(id: string, path: string, message: string, opts: GitCommitOptions = {}): Promise<GitResult> {
+    const { addAll = true, ...rest } = opts;
+    if (addAll) {
+      const r = await this.git(id, 'add', { path, image: rest.image, approval: rest.approval, signal: rest.signal });
+      if (!r.ok) return r;
+    }
+    return this.git(id, 'commit', { ...rest, path, message });
+  }
+
+  // --- toolbox: shell sessions -------------------------------------------------------
+
+  /** POST …/sessions: a shell that keeps `cd` and `export` between commands. */
+  createSession(id: string, name?: string, opts: CreateSessionOptions = {}): Promise<SessionInfo> {
+    const body: Record<string, unknown> = {};
+    if (name) body.name = name;
+    if (opts.image) body.image = opts.image;
+    if (opts.env && Object.keys(opts.env).length > 0) body.env = opts.env;
+    return this.transport.json('POST', `/kosa8/v1/sandboxes/${enc(id)}/sessions`, {
+      body,
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+  }
+
+  /** GET …/sessions */
+  async listSessions(id: string, opts: CallOptions = {}): Promise<SessionInfo[]> {
+    return (await this.transport.json<SessionInfo[] | null>('GET', `/kosa8/v1/sandboxes/${enc(id)}/sessions`, opts)) ?? [];
+  }
+
+  /** POST …/sessions/{name}/exec: run one command line in the session. */
+  async sessionExec(id: string, session: string, command: string, opts: SessionExecOptions = {}): Promise<ShellResult> {
+    const body: Record<string, unknown> = { command };
+    if (opts.timeoutS) body.timeout_s = opts.timeoutS;
+    const d = await this.transport.json<Record<string, unknown>>(
+      'POST',
+      `/kosa8/v1/sandboxes/${enc(id)}/sessions/${enc(session)}/exec`,
+      { body, approval: opts.approval, signal: opts.signal },
+    );
+    const exitCode = num(d.exit);
+    const timedOut = d.timed_out === true;
+    return {
+      ok: exitCode === 0 && !timedOut,
+      exitCode,
+      stdout: str(d.stdout),
+      stderr: str(d.stderr),
+      cwd: str(d.cwd),
+      durationMs: num(d.duration_ms),
+      timedOut,
+      truncated: d.truncated === true,
+    };
+  }
+
+  /** Run a command in a session (default `main`), making the session on first use. */
+  async shell(id: string, command: string, opts: ShellOptions = {}): Promise<ShellResult> {
+    const { session = 'main', ...rest } = opts;
+    try {
+      return await this.sessionExec(id, session, command, rest);
+    } catch (err) {
+      if (!(err instanceof Kosa8NotFoundError) || !err.message.includes('no such session')) throw err;
+    }
+    await this.createSession(id, session, { approval: rest.approval, signal: rest.signal });
+    return this.sessionExec(id, session, command, rest);
+  }
+
+  /** DELETE …/sessions/{name} */
+  deleteSession(id: string, session: string, opts: CallOptions = {}): Promise<{ deleted: string }> {
+    return this.transport.json('DELETE', `/kosa8/v1/sandboxes/${enc(id)}/sessions/${enc(session)}`, opts);
+  }
+
+  // --- toolbox: terminals ----------------------------------------------------------
+
+  /**
+   * POST …/pty: a container with a terminal; resolves with its id. Connect
+   * to `/kosa8/v1/sandboxes/{id}/containers/{cid}/tty` with any WebSocket
+   * client: binary messages are the terminal, text messages JSON control.
+   */
+  async startPty(id: string, opts: StartPtyOptions = {}): Promise<string> {
+    const body: Record<string, unknown> = {};
+    if (opts.image) body.image = opts.image;
+    if (opts.command && opts.command.length > 0) body.command = opts.command;
+    if (opts.cols && opts.rows) {
+      body.cols = opts.cols;
+      body.rows = opts.rows;
+    }
+    if (opts.env && Object.keys(opts.env).length > 0) body.env = opts.env;
+    const out = await this.transport.json<{ id: string }>('POST', `/kosa8/v1/sandboxes/${enc(id)}/pty`, {
+      body,
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+    return out.id;
+  }
+
+  /** POST …/containers/{cid}/resize: set a terminal's size. */
+  resizePty(id: string, container: string, cols: number, rows: number, opts: CallOptions = {}): Promise<{ ok: boolean }> {
+    return this.transport.json('POST', `/kosa8/v1/sandboxes/${enc(id)}/containers/${enc(container)}/resize`, {
+      ...opts,
+      body: { cols, rows },
+    });
+  }
+
+  // --- toolbox: previews -----------------------------------------------------------
+
+  /** POST …/previews: a signed link, which expires, to a web server in the sandbox. */
+  createPreview(id: string, port: number, opts: CreatePreviewOptions = {}): Promise<Preview> {
+    const body: Record<string, unknown> = { port };
+    if (opts.session) body.session = opts.session;
+    if (opts.container) body.container = opts.container;
+    if (opts.expiresInS) body.expires_in_s = opts.expiresInS;
+    return this.transport.json('POST', `/kosa8/v1/sandboxes/${enc(id)}/previews`, {
+      body,
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+  }
+
+  /** POST /kosa8/v1/previews/rotate: end every preview link at once. */
+  revokePreviews(opts: CallOptions = {}): Promise<{ ok: boolean; revoked: string }> {
+    return this.transport.json('POST', '/kosa8/v1/previews/rotate', opts);
+  }
+
+  // --- toolbox: lifecycle ----------------------------------------------------------
+
+  /**
+   * POST …/lifecycle: change auto-stop, auto-delete, TTL or ephemeral.
+   * Options left out keep their value; 0 (or `false`) turns one off.
+   */
+  setLifecycle(id: string, opts: SetLifecycleOptions = {}): Promise<Sandbox> {
+    const body: Lifecycle = {};
+    if (opts.autoStopMin !== undefined) body.auto_stop_min = opts.autoStopMin;
+    if (opts.autoDeleteMin !== undefined) body.auto_delete_min = opts.autoDeleteMin;
+    if (opts.ttlMin !== undefined) body.ttl_min = opts.ttlMin;
+    if (opts.ephemeral !== undefined) body.ephemeral = opts.ephemeral;
+    return this.transport.json('POST', `/kosa8/v1/sandboxes/${enc(id)}/lifecycle`, {
+      body,
+      approval: opts.approval,
+      signal: opts.signal,
+    });
+  }
+
+  // --- toolbox: templates ----------------------------------------------------------
+
+  /** GET /kosa8/v1/templates */
+  async listTemplates(opts: CallOptions = {}): Promise<Template[]> {
+    return (await this.transport.json<Template[] | null>('GET', '/kosa8/v1/templates', opts)) ?? [];
+  }
+
+  /** DELETE /kosa8/v1/templates/{name}. Sandboxes made from it keep their copy. */
+  deleteTemplate(name: string, opts: CallOptions = {}): Promise<{ deleted: string }> {
+    return this.transport.json('DELETE', `/kosa8/v1/templates/${enc(name)}`, opts);
+  }
+
+  /**
+   * POST /kosa8/v1/templates: build `contextDir`'s Dockerfile in a throwaway
+   * sandbox and keep the image as a template, for `createSandbox({ template })`.
+   * The context is packed honouring `.dockerignore`. Resolves with the final
+   * frame (`{ done, ok, image }`); a failed build throws Kosa8StreamError.
+   */
+  async buildTemplate(name: string, contextDir = '.', opts: BuildTemplateOptions = {}): Promise<Frame> {
+    const dockerfile = opts.dockerfile ?? 'Dockerfile';
+    const q = new URLSearchParams();
+    q.append('name', name);
+    q.append('dockerfile', dockerfile);
+    for (const [k, v] of Object.entries(opts.buildArgs ?? {})) q.append('buildarg', `${k}=${v}`);
+    const egress = egressString(opts.egress);
+    if (egress) q.append('egress', egress);
+    if (opts.replace) q.append('replace', '1');
+    const ctx = await tarContext(contextDir, dockerfile);
+    let out = '';
+    for await (const f of this.transport.frames('POST', `/kosa8/v1/templates?${q.toString()}`, {
+      rawBody: ctx,
+      approval: opts.approval,
+      signal: opts.signal,
+    })) {
+      if (f.done) {
+        if (f.error) throw new Kosa8StreamError(f.error, { stdout: out, stderr: '' }, { daemonMessage: f.error });
+        return f;
+      }
+      if (f.data) {
+        out += f.data.toString('utf8');
+        opts.onOutput?.(f.data, f.stream ?? 'stdout');
+      }
+    }
+    throw new Kosa8StreamError('template build stream ended without a final frame', { stdout: out, stderr: '' });
+  }
+
   // --- helpers -------------------------------------------------------------------
 
   /** A handle bound to one sandbox. */
@@ -688,5 +1168,71 @@ export class SandboxHandle {
   }
   rewind(opts?: RewindOptions) {
     return this.client.rewind(this.id, opts);
+  }
+  runCode(code: string, opts?: RunCodeOptions) {
+    return this.client.runCode(this.id, code, opts);
+  }
+  listFiles(path?: string, opts?: CallOptions) {
+    return this.client.listFiles(this.id, path, opts);
+  }
+  statFile(path: string, opts?: CallOptions) {
+    return this.client.statFile(this.id, path, opts);
+  }
+  readFile(path: string, opts?: CallOptions) {
+    return this.client.readFile(this.id, path, opts);
+  }
+  readText(path: string, opts?: CallOptions & { encoding?: BufferEncoding }) {
+    return this.client.readText(this.id, path, opts);
+  }
+  writeFile(path: string, data: Uint8Array | string | AsyncIterable<Uint8Array | string>, opts?: WriteFileOptions) {
+    return this.client.writeFile(this.id, path, data, opts);
+  }
+  deleteFile(path: string, opts?: CallOptions & { recursive?: boolean }) {
+    return this.client.deleteFile(this.id, path, opts);
+  }
+  makeDir(path: string, opts?: CallOptions) {
+    return this.client.makeDir(this.id, path, opts);
+  }
+  moveFile(from: string, to: string, opts?: CallOptions) {
+    return this.client.moveFile(this.id, from, to, opts);
+  }
+  git(op: GitOp | (string & {}), opts?: GitOptions) {
+    return this.client.git(this.id, op, opts);
+  }
+  gitClone(url: string, opts?: GitOptions) {
+    return this.client.gitClone(this.id, url, opts);
+  }
+  gitStatus(path: string, opts?: GitOptions) {
+    return this.client.gitStatus(this.id, path, opts);
+  }
+  gitCommit(path: string, message: string, opts?: GitCommitOptions) {
+    return this.client.gitCommit(this.id, path, message, opts);
+  }
+  createSession(name?: string, opts?: CreateSessionOptions) {
+    return this.client.createSession(this.id, name, opts);
+  }
+  sessions(opts?: CallOptions) {
+    return this.client.listSessions(this.id, opts);
+  }
+  sessionExec(session: string, command: string, opts?: SessionExecOptions) {
+    return this.client.sessionExec(this.id, session, command, opts);
+  }
+  shell(command: string, opts?: ShellOptions) {
+    return this.client.shell(this.id, command, opts);
+  }
+  deleteSession(session: string, opts?: CallOptions) {
+    return this.client.deleteSession(this.id, session, opts);
+  }
+  startPty(opts?: StartPtyOptions) {
+    return this.client.startPty(this.id, opts);
+  }
+  resizePty(container: string, cols: number, rows: number, opts?: CallOptions) {
+    return this.client.resizePty(this.id, container, cols, rows, opts);
+  }
+  createPreview(port: number, opts?: CreatePreviewOptions) {
+    return this.client.createPreview(this.id, port, opts);
+  }
+  setLifecycle(opts: SetLifecycleOptions) {
+    return this.client.setLifecycle(this.id, opts);
   }
 }

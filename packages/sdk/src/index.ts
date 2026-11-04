@@ -12,7 +12,19 @@ export type {
   RewindOptions,
   RewindResult,
   RestoreOptions,
+  RunCodeOptions,
+  WriteFileOptions,
+  GitOptions,
+  GitCommitOptions,
+  CreateSessionOptions,
+  SessionExecOptions,
+  ShellOptions,
+  StartPtyOptions,
+  CreatePreviewOptions,
+  SetLifecycleOptions,
+  BuildTemplateOptions,
 } from './client.js';
+export { tarContext } from './tar.js';
 export {
   Transport,
   resolveEndpoint,
