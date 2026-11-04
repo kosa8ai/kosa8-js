@@ -43,7 +43,7 @@ const sbx = (over: Record<string, unknown> = {}) => ({
 describe('Kosa8Cloud', () => {
   it('reads the key and address from the environment, and refuses bad ones', () => {
     const c = new Kosa8Cloud({ env: { KOSA8_API_KEY: KEY }, fetch: stub(() => [200, {}]).f });
-    expect(c.baseUrl).toBe('https://api.kosa8.cloud');
+    expect(c.baseUrl).toBe('https://api.kosa8.com');
     expect(() => new Kosa8Cloud({ env: {} })).toThrow(/KOSA8_API_KEY/);
     expect(() => new Kosa8Cloud({ apiKey: 'sk-other', env: {} })).toThrow(/k8c_live_/);
     expect(() => new Kosa8Cloud({ apiKey: KEY, baseUrl: 'http://cp.example.com', env: {} })).toThrow(/https/);
