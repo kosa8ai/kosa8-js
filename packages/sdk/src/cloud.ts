@@ -21,13 +21,13 @@
 
 import { Kosa8ConnectionError, Kosa8Error, Kosa8TimeoutError, errorFromResponse } from './errors.js';
 
-export const DEFAULT_CLOUD_URL = 'https://api.kosa8.cloud';
+export const DEFAULT_CLOUD_URL = 'https://api.kosa8.com';
 export const CLOUD_KEY_PREFIX = 'k8c_live_';
 
 export interface Kosa8CloudOptions {
   /** API key. Defaults to the KOSA8_API_KEY environment variable. */
   apiKey?: string;
-  /** Control-plane address. Defaults to KOSA8_CLOUD_URL, then https://api.kosa8.cloud. */
+  /** Control-plane address. Defaults to KOSA8_CLOUD_URL, then https://api.kosa8.com. */
   baseUrl?: string;
   /** Where to read KOSA8_API_KEY and KOSA8_CLOUD_URL from. Defaults to process.env. */
   env?: Record<string, string | undefined>;
