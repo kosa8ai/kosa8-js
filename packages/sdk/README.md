@@ -83,9 +83,16 @@ All methods return promises. Every method takes `{ approval?, signal? }` as its 
 | `host` | `KOSA8_HOST` | remote worker: `https://…`, `tcp://host:port`, `host:port`, or `unix:///path.sock` |
 | `token` | `KOSA8_TOKEN` (with `KOSA8_HOST`) | bearer token for a remote worker |
 | `insecure` | `KOSA8_INSECURE=1` | allow plain http to a non-loopback host (refused by default, as in the CLI) |
+| `workerFile` | `$HOME/.kosa8/worker.json` | the CLI's saved worker connection, used when no `host`, `KOSA8_HOST` or `socketPath` is given; `null` reads none |
 | `actor` | `'tool'` | `X-Kosa8-Actor`: how the audit log files these requests (`human`, `agent`, `tool`) |
 | `agentToken` | `KOSA8_AGENT_TOKEN` | agent identity token, for policies that require one |
 | `checkpointStore` | `FileCheckpointStore` (`~/.kosa8/checkpoints.json`) | where checkpoint stacks live; `MemoryCheckpointStore` keeps them in memory |
+
+Where requests go, in order: `host` or `KOSA8_HOST`; else the connection the
+CLI saved (`kosa8 wsl setup` on Windows, where the engine runs in WSL2, or
+`kosa8 worker join` anywhere), with its token; else the local daemon's socket.
+So on Windows, once `kosa8 wsl setup` has run, `new Kosa8Client()` reaches the
+WSL2 engine with no configuration.
 
 ### Status
 
@@ -188,6 +195,36 @@ console.log((await sb.shell('echo $FOO; pwd')).stdout); // "bar\n/tmp\n"
 | `rewind(id, { to? })` → `{ sandbox, checkpoint, dropped, restore_ms }` | back to the latest checkpoint, or to one named by id or label, with processes resumed |
 
 The daemon has no checkpoint endpoint. Checkpoints are bookkeeping kept on the client side over snapshots, exactly as in the kosa8 CLI and MCP server. By default they go in the CLI's own store, so `kosa8 rewind` sees checkpoints you took with the SDK, and the SDK sees the CLI's. A rewind deletes the sandbox and restores the checkpoint under the same name, and checkpoints taken after the target are discarded.
+
+## kosa8 Cloud
+
+The same client shape, against kosa8 Cloud instead of the local daemon. Make
+an API key in the cloud dashboard and set `KOSA8_API_KEY`.
+
+```ts
+import { Kosa8Cloud, Kosa8PaymentRequiredError } from '@kosa8/sdk';
+
+const cloud = new Kosa8Cloud(); // or new Kosa8Cloud({ apiKey: 'k8c_live_…' })
+
+const box = await cloud.sandboxes.create({ template: 'python', sleepAfterS: 600 });
+const r = await box.exec(['python3', '-c', 'print(6 * 7)']);
+console.log(r.exitCode, r.stdout); // 0 "42\n"
+await box.sleep();   // costs only snapshot storage while asleep
+await box.exec('ls /workspace'); // wakes it, files and all
+await box.delete();
+
+await cloud.functions.deploy('hello', {
+  runtime: 'python3.12',
+  code: 'def handler(event):\n    return {"hello": event.get("name", "world")}\n',
+});
+const out = await cloud.functions.invoke('hello', { name: 'kosa8' });
+console.log(out.ok, out.result); // true { hello: 'kosa8' }
+```
+
+A new organization runs nothing until a payment method is on file; until
+then creating a sandbox throws `Kosa8PaymentRequiredError` (`code`
+`payment_required`), whose message says what to do. Every error from the
+cloud carries its stable `code`.
 
 ## Errors
 

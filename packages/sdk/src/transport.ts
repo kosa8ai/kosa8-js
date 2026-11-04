@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as os from 'node:os';
@@ -37,6 +38,13 @@ export interface TransportOptions {
   headers?: Record<string, string>;
   /** Environment to read KOSA8_* variables from. Default `process.env`. */
   env?: Record<string, string | undefined>;
+  /**
+   * The CLI's saved worker connection, used when neither `host` nor KOSA8_HOST
+   * is set (and no `socketPath` is given): what `kosa8 wsl setup` writes on
+   * Windows, and `kosa8 worker join` anywhere. Default
+   * `$HOME/.kosa8/worker.json`; `null` reads none.
+   */
+  workerFile?: string | null;
 }
 
 export interface RequestOptions {
@@ -63,6 +71,36 @@ export function defaultSocketPath(): string {
   return path.join(os.homedir(), '.kosa8', 'run', 'kosa8.sock');
 }
 
+/** The CLI's saved worker connection: $HOME/.kosa8/worker.json (internal/cli/worker.go). */
+export function defaultWorkerFile(): string {
+  return path.join(os.homedir(), '.kosa8', 'worker.json');
+}
+
+interface SavedWorker {
+  host: string;
+  token?: string;
+  insecure: boolean;
+}
+
+/** The saved connection, or undefined when there is none or it cannot be read. */
+function loadSavedWorker(file: string): SavedWorker | undefined {
+  let w: unknown;
+  try {
+    w = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!w || typeof w !== 'object') return undefined;
+  const o = w as Record<string, unknown>;
+  const host = typeof o.host === 'string' ? o.host.trim() : '';
+  if (host === '') return undefined;
+  return {
+    host,
+    token: typeof o.token === 'string' && o.token !== '' ? o.token : undefined,
+    insecure: o.insecure === true,
+  };
+}
+
 function isLoopback(hostname: string): boolean {
   const h = hostname.replace(/^\[|\]$/g, '');
   return h === 'localhost' || h === '::1' || /^127\./.test(h);
@@ -72,11 +110,22 @@ function isLoopback(hostname: string): boolean {
 export function resolveEndpoint(opts: TransportOptions): Endpoint {
   const env = opts.env ?? process.env;
   const fromEnv = (env.KOSA8_HOST ?? '').trim();
-  const raw = (opts.host ?? fromEnv).trim().replace(/\/+$/, '');
-  if (raw === '') {
-    return { kind: 'unix', socketPath: opts.socketPath ?? defaultSocketPath() };
+  const raw = (opts.host ?? fromEnv).trim();
+  const envInsecure = opts.insecure === true || env.KOSA8_INSECURE === '1';
+  if (raw !== '') {
+    // A saved token is never sent to a host named here.
+    const token = opts.token ?? (opts.host === undefined && fromEnv !== '' ? env.KOSA8_TOKEN : undefined);
+    return parseHost(raw, envInsecure, token);
   }
-  let h = raw;
+  if (opts.socketPath === undefined && opts.workerFile !== null) {
+    const saved = loadSavedWorker(opts.workerFile ?? defaultWorkerFile());
+    if (saved) return parseHost(saved.host, envInsecure || saved.insecure, opts.token ?? saved.token);
+  }
+  return { kind: 'unix', socketPath: opts.socketPath ?? defaultSocketPath() };
+}
+
+function parseHost(raw: string, insecure: boolean, token: string | undefined): Endpoint {
+  let h = raw.replace(/\/+$/, '');
   const i = h.indexOf('://');
   if (i > 0) h = h.slice(0, i).toLowerCase() + h.slice(i);
   if (h.startsWith('unix://')) {
@@ -92,14 +141,12 @@ export function resolveEndpoint(opts: TransportOptions): Endpoint {
     h = 'http://' + h;
   }
   const url = new URL(h);
-  const insecure = opts.insecure === true || env.KOSA8_INSECURE === '1';
   if (url.protocol === 'http:' && !insecure && !isLoopback(url.hostname)) {
     throw new Kosa8Error(
       `refusing to talk to ${url.host} over plain http: the token and every request would cross the network unencrypted. ` +
         `Use https://${url.host} (a worker behind a TLS-terminating tunnel or proxy), or set insecure: true / KOSA8_INSECURE=1 if this link is already private and trusted`,
     );
   }
-  const token = opts.token ?? (opts.host === undefined && fromEnv !== '' ? env.KOSA8_TOKEN : undefined);
   return { kind: 'tcp', url, token: token || undefined };
 }
 
@@ -206,7 +253,9 @@ export class Transport {
           new Kosa8ConnectionError(
             `kosa8 daemon unreachable at ${this.target}: ${err.message}` +
               (err.code === 'ENOENT' || err.code === 'ECONNREFUSED'
-                ? ' (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)'
+                ? this.endpoint.kind === 'unix' && process.platform === 'win32'
+                  ? ' (on Windows the engine runs in WSL2: run `kosa8 wsl setup`, or set KOSA8_HOST)'
+                  : ' (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)'
                 : ''),
             { method, path: p, cause: err },
           ),

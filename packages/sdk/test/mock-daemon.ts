@@ -27,7 +27,11 @@ export class MockDaemon {
 
   constructor() {
     this.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'k8m-'));
-    this.socketPath = path.join(this.dir, 'd.sock');
+    // Windows has no socket files; node listens on a named pipe there, and
+    // http.request's socketPath reaches it the same way.
+    this.socketPath = process.platform === 'win32'
+      ? `\\\\.\\pipe\\${path.basename(this.dir)}`
+      : path.join(this.dir, 'd.sock');
     this.server = http.createServer(async (req, res) => {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);

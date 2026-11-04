@@ -29,6 +29,7 @@ export {
   Transport,
   resolveEndpoint,
   defaultSocketPath,
+  defaultWorkerFile,
   APPROVAL_HEADER,
   ACTOR_HEADER,
   AGENT_TOKEN_HEADER,
@@ -45,6 +46,7 @@ export type { CheckpointStore } from './checkpoints.js';
 export {
   Kosa8Error,
   Kosa8ConnectionError,
+  Kosa8TimeoutError,
   Kosa8ApiError,
   Kosa8BadRequestError,
   Kosa8AuthError,
@@ -55,7 +57,20 @@ export {
   Kosa8UnsupportedError,
   Kosa8StreamError,
   Kosa8CheckpointError,
+  Kosa8PaymentRequiredError,
+  Kosa8RateLimitError,
   errorFromResponse,
 } from './errors.js';
 export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule } from './errors.js';
 export type * from './types.js';
+export { Kosa8Cloud, CloudSandbox, CloudSandboxes, CloudFunctions, DEFAULT_CLOUD_URL, CLOUD_KEY_PREFIX } from './cloud.js';
+export type {
+  Kosa8CloudOptions,
+  CloudSandboxInfo,
+  CloudCreateOptions,
+  CloudExecOptions,
+  CloudExecResult,
+  CloudInvokeResult,
+  CloudInvocation,
+  CloudFunctionSpec,
+} from './cloud.js';
