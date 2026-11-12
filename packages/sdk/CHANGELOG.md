@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 — 2026-11-12
+
+kosa8 Cloud parity with the Cloud API (and the Python SDK).
+
+- Default address is `https://api.kosa8.com` (`KOSA8_CLOUD_URL` overrides it). 0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0.
+- `cloud.sandboxes.create` takes `ttlS` (60 to 7776000 s), `deleteAfter` (Unix ms or a `Date`; not with `ttlS`) and `acceptPrice` (paid kosa8 Store items). Lifetimes and `sleepAfterS` are checked before any request; only the options you set are sent.
+- `CloudSandbox.update({ ttlS?, deleteAfter?, sleepAfterS? })` (`PATCH /v1/sandboxes/{id}`); `{ ttlS: null }` clears the lifetime. Answers `{ sandbox, notes }` and refreshes `info`.
+- Pagination: `list()` still answers an array and now takes `limit` and `cursor`; new `listPage()` → `{ sandboxes, nextCursor }` and `iterate()`, an async iterator over every page that stops if a cursor repeats. Servers without pagination answer everything at once with `nextCursor: null`.
+- Files: `box.files.read` (a `Uint8Array`), `readText`, `write` (a string or a `Uint8Array`, sent as raw bytes), `list` (default `/workspace`), `mkdir`, `delete` (with `recursive`).
+- `box.checkpoint(label?)`, `box.checkpoints()`, `box.rewind(checkpoint)`, `box.fork(n)` (1 to 100) and `box.ports()`. These and files need the host's data plane and may answer 501 (`Kosa8UnsupportedError`) on current hosts.
+- `cloud.templates()`.
+- `CloudSandboxInfo` follows the API's Sandbox schema: `source` can be `fork`; new `parent_id`, `delete_after`, `sleep_after_s`, `host_unreachable`, `origin_item_version`; more `state` values.
+- Errors: `Kosa8PaymentRequiredError` has `upgradeUrl` and `agentMessage` (`null` when absent). New `Kosa8OrgFrozenError` (423 `org_frozen`) and `Kosa8ExecTimeoutError` (504, `exec_timeout`, or a 502 `host_failed` on exec that timed out; a buffered exec is cut off after about 30 s). `Kosa8RateLimitError` has `retryAfter` (seconds) when the answer had a Retry-After header. Every cloud error keeps the whole answer as `body`.
+- New types: `CloudUpdateOptions`, `CloudListOptions`, `CloudSandboxPage`, `CloudFileInfo`, `CloudCheckpoint`, `CloudRewindResult`, `CloudPort`, `CloudTemplate`; constants `MIN_TTL_S`, `MAX_TTL_S`, `MAX_SLEEP_AFTER_S`, `MAX_FORK_N`.
+- README leads with kosa8 Cloud, including what the base template can and cannot do.
+
 ## 0.3.1 — 2026-11-03
 
 - The default kosa8 Cloud address is now `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`, which kosa8 Cloud does not use). `KOSA8_CLOUD_URL` still overrides it.
