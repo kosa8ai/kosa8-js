@@ -8,7 +8,7 @@
  * import { Kosa8Cloud } from '@kosa8/sdk';
  *
  * const cloud = new Kosa8Cloud(); // KOSA8_API_KEY from the environment
- * const sbx = await cloud.sandboxes.create({ template: 'python' });
+ * const sbx = await cloud.sandboxes.create({ template: 'python', ttlS: 3600 });
  * const r = await sbx.exec(['python3', '-c', 'print(6 * 7)']);
  * console.log(r.stdout); // "42\n"
  * await sbx.delete();
@@ -19,7 +19,13 @@
  * `code` (for example `payment_required`, `quota_exceeded`).
  */
 
-import { Kosa8ConnectionError, Kosa8Error, Kosa8TimeoutError, errorFromResponse } from './errors.js';
+import {
+  Kosa8ConnectionError,
+  Kosa8Error,
+  Kosa8ExecTimeoutError,
+  Kosa8TimeoutError,
+  errorFromResponse,
+} from './errors.js';
 
 export const DEFAULT_CLOUD_URL = 'https://api.kosa8.com';
 export const CLOUD_KEY_PREFIX = 'k8c_live_';
@@ -37,33 +43,140 @@ export interface Kosa8CloudOptions {
   timeoutMs?: number;
 }
 
+/** Shortest and longest lifetime `ttlS` accepts, in seconds (1 minute to 90 days). */
+export const MIN_TTL_S = 60;
+export const MAX_TTL_S = 7_776_000;
+/** Longest idle time before sleep `sleepAfterS` accepts, in seconds (7 days). */
+export const MAX_SLEEP_AFTER_S = 604_800;
+/** Most copies one fork makes. */
+export const MAX_FORK_N = 100;
+
+/** A cloud sandbox as the API reports it (the OpenAPI `Sandbox` schema). Times are Unix ms. */
 export interface CloudSandboxInfo {
   id: string;
-  state: 'creating' | 'running' | 'sleeping' | 'stopped' | 'deleted' | 'error' | string;
+  state:
+    | 'creating' | 'running' | 'paused' | 'sleeping' | 'stopped' | 'error' | 'deleted' | 'host_removed' | 'host_lost'
+    | (string & {});
   template: string;
+  /** The kosa8 Store version it was started (or forked) from. */
+  origin_item_version?: string | null;
   cpus: number;
   mem_mb: number;
-  source: 'pool' | 'restore' | 'cold' | null;
+  source: 'pool' | 'restore' | 'cold' | 'fork' | null;
+  /** The sandbox it was forked from, if any. */
+  parent_id?: string | null;
   region: string | null;
   own_host: boolean;
   created_at: number;
   started_at: number | null;
   stopped_at: number | null;
   deleted_at: number | null;
+  /** Unix ms when it is deleted automatically; null for no limit. */
+  delete_after?: number | null;
+  /** Idle seconds before it sleeps; 0 never. */
+  sleep_after_s?: number | null;
   last_error: string | null;
+  /** Its host has missed heartbeats; the sandbox is kept and is back when the host is. */
+  host_unreachable?: boolean;
   running_s: number;
   asleep_s: number;
-  sleep_bytes: number;
+  sleep_bytes?: number;
+  /** Cost estimate so far, USD. */
   cost_usd: number;
 }
 
 export interface CloudCreateOptions {
-  /** Template key, such as base, python or node. Defaults to the org's setting. */
+  /**
+   * Template key from `cloud.templates()`, such as base, python or node, or a
+   * kosa8 Store item (creator/name or creator/name@1.2.3). Defaults to the
+   * org's setting.
+   */
   template?: string;
   /** Region id, such as eu-hel1. Defaults to the org's setting (any region). */
   region?: string;
-  /** Idle seconds before the sandbox sleeps; 0 never. Defaults to the org's setting. */
+  /** Idle seconds before the sandbox sleeps (0..604800); 0 never. Defaults to the org's setting. */
   sleepAfterS?: number;
+  /** Delete it this many seconds from now (60..7776000). Not with `deleteAfter`. */
+  ttlS?: number;
+  /** Or delete it at this time (Unix ms or a Date). Not with `ttlS`. */
+  deleteAfter?: number | Date;
+  /** A paid kosa8 Store item only: its current price in USD, which the person agreed to. */
+  acceptPrice?: number;
+}
+
+export interface CloudUpdateOptions {
+  /** Delete it this many seconds from now (60..7776000); `null` clears the lifetime. Not with `deleteAfter`. */
+  ttlS?: number | null;
+  /** Delete it at this time (Unix ms or a Date); `null` clears the lifetime. Not with `ttlS`. */
+  deleteAfter?: number | Date | null;
+  /** Idle seconds before it sleeps (0..604800); 0 never. */
+  sleepAfterS?: number;
+}
+
+export interface CloudListOptions {
+  /** Include deleted sandboxes. */
+  all?: boolean;
+  /** Page size. Sent to the API; servers without pagination ignore it. */
+  limit?: number;
+  /** `nextCursor` of the previous page. */
+  cursor?: string;
+}
+
+/** One page of `cloud.sandboxes.listPage()`. */
+export interface CloudSandboxPage {
+  sandboxes: CloudSandbox[];
+  /** Pass as `cursor` for the next page; null when this is the last (or the server does not paginate). */
+  nextCursor: string | null;
+}
+
+/** A file or folder in a cloud sandbox. */
+export interface CloudFileInfo {
+  name?: string;
+  path: string;
+  /** file | dir */
+  type?: 'file' | 'dir' | (string & {});
+  size?: number;
+  mode?: string;
+  mod_time?: string;
+}
+
+/** A saved checkpoint of a cloud sandbox: memory, processes and disk. */
+export interface CloudCheckpoint {
+  id: string;
+  label?: string;
+  /** Saved automatically before a rewind. */
+  auto?: boolean;
+  created_at?: string | null;
+  bytes?: number;
+}
+
+export interface CloudRewindResult {
+  /** The checkpoint it went back to. */
+  checkpoint: CloudCheckpoint;
+  /** The sandbox as it was before the rewind, saved automatically. */
+  backup: CloudCheckpoint;
+  ms: number | null;
+}
+
+/** A TCP port listening in a cloud sandbox. */
+export interface CloudPort {
+  port: number;
+  address: string;
+  container: string;
+  loopback: boolean;
+}
+
+/** A template the org can create sandboxes from. */
+export interface CloudTemplate {
+  key: string;
+  cpus?: number;
+  mem_mb?: number;
+  image?: string;
+  regions?: string[];
+  hosts?: number;
+  warm?: number;
+  own_host?: boolean;
+  [k: string]: unknown;
 }
 
 export interface CloudExecOptions {
@@ -111,6 +224,33 @@ export interface CloudFunctionSpec {
 }
 
 type Json = Record<string, unknown>;
+
+interface RawOptions {
+  /** A JSON body. */
+  json?: unknown;
+  /** Raw bytes, sent as application/octet-stream. */
+  bytes?: Uint8Array;
+}
+
+function toMs(v: number | Date): number {
+  return v instanceof Date ? v.getTime() : v;
+}
+
+function checkInt(name: string, v: number, min: number, max: number): void {
+  if (!Number.isInteger(v) || v < min || v > max) {
+    throw new Kosa8Error(`${name} must be a whole number from ${min} to ${max}, got ${v}`);
+  }
+}
+
+/** Seconds from a Retry-After header (seconds or an HTTP date). */
+function parseRetryAfter(h: string | null): number | undefined {
+  if (!h) return undefined;
+  const t = h.trim();
+  if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+  const at = Date.parse(t);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
 
 function trimSlash(s: string): string {
   return s.replace(/\/+$/, '');
@@ -165,22 +305,56 @@ export class Kosa8Cloud {
     return this.request('GET', '/v1/usage');
   }
 
+  /** Templates the org can create sandboxes from now. */
+  async templates(): Promise<CloudTemplate[]> {
+    return (await this.request<{ templates: CloudTemplate[] }>('GET', '/v1/templates')).templates ?? [];
+  }
+
   /** @internal */
   async request<T = Json>(method: string, path: string, body?: unknown): Promise<T> {
+    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json');
+    const text = await resp.text();
+    let data: unknown = text;
+    try {
+      data = text === '' ? null : JSON.parse(text);
+    } catch {
+      // not JSON; kept as text
+    }
+    if (!resp.ok) throw cloudError(resp, data, { method, path });
+    return data as T;
+  }
+
+  /** @internal Raw bytes in and/or out (the files endpoints). */
+  async requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
+    const resp = await this.send(method, path, bytes !== undefined ? { bytes } : {}, 'application/octet-stream, application/json');
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    if (!resp.ok) {
+      const text = new TextDecoder().decode(buf);
+      let data: unknown = text;
+      try {
+        data = text === '' ? null : JSON.parse(text);
+      } catch {
+        // not JSON; kept as text
+      }
+      throw cloudError(resp, data, { method, path });
+    }
+    return buf;
+  }
+
+  private async send(method: string, path: string, raw: RawOptions, accept: string): Promise<Response> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), this.timeoutMs);
-    let resp: Response;
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: accept };
+    let body: BodyInit | undefined;
+    if (raw.bytes !== undefined) {
+      headers['Content-Type'] = 'application/octet-stream';
+      body = raw.bytes as unknown as BodyInit;
+    } else if (raw.json !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(raw.json);
+    }
     try {
-      resp = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          Accept: 'application/json',
-          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: ctl.signal,
-      });
+      return await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body, signal: ctl.signal });
     } catch (e) {
       if (ctl.signal.aborted) {
         throw new Kosa8TimeoutError(`kosa8 Cloud did not answer within ${this.timeoutMs} ms`, { method, path, cause: e });
@@ -189,50 +363,121 @@ export class Kosa8Cloud {
     } finally {
       clearTimeout(timer);
     }
-    const text = await resp.text();
-    let data: unknown = text;
-    try {
-      data = text === '' ? null : JSON.parse(text);
-    } catch {
-      // not JSON; kept as text
-    }
-    if (!resp.ok) throw cloudError(resp.status, data, { method, path });
-    return data as T;
   }
 }
 
+const EXEC_LIMIT_HINT =
+  'a buffered kosa8 Cloud exec is cut off after about 30 s; run long jobs in the background ' +
+  "(sh -c 'nohup cmd > /workspace/out.log 2>&1 &') and poll /workspace for the result";
+
 /**
- * The cloud answers {error: code, message}. The SDK's errors read the
- * sentence as their message and keep the code.
+ * The cloud answers {error: code, message, upgrade_url?, agent_message?}. The
+ * SDK's errors read the sentence as their message, keep the code, and keep
+ * the whole answer as `body`.
  */
-function cloudError(status: number, body: unknown, ctx: { method: string; path: string }): Kosa8Error {
+function cloudError(resp: Response, body: unknown, ctx: { method: string; path: string }): Kosa8Error {
+  const status = resp.status;
   let code: string | undefined;
-  let msgBody: unknown = body;
+  let message: string | undefined;
   if (typeof body === 'object' && body !== null) {
     const b = body as Json;
     if (typeof b.error === 'string') code = b.error;
-    msgBody = { error: typeof b.message === 'string' && b.message ? b.message : b.error };
+    const m = typeof b.message === 'string' && b.message ? b.message : b.error;
+    if (typeof m === 'string' && m) message = m;
+  } else if (typeof body === 'string' && body.trim() !== '') {
+    message = body.trim();
   }
-  return errorFromResponse(status, msgBody, { ...ctx, code });
+  const pathOnly = ctx.path.split('?')[0]!;
+  const execTimeout =
+    status === 504 ||
+    code === 'exec_timeout' ||
+    (status === 502 && code === 'host_failed' && pathOnly.endsWith('/exec') && /timed out/i.test(message ?? ''));
+  if (execTimeout) {
+    const base = message ?? `request failed with HTTP ${status}`;
+    return new Kosa8ExecTimeoutError(`${base} (${EXEC_LIMIT_HINT})`, {
+      status, daemonMessage: message, body, code, ...ctx,
+    });
+  }
+  const retryAfter = status === 429 ? parseRetryAfter(resp.headers?.get?.('Retry-After') ?? null) : undefined;
+  return errorFromResponse(status, message !== undefined ? { error: message } : body, {
+    ...ctx, code, body, ...(retryAfter !== undefined ? { retryAfter } : {}),
+  });
+}
+
+function createBody(opts: CloudCreateOptions): Json {
+  const body: Json = {};
+  if (opts.ttlS !== undefined && opts.deleteAfter !== undefined) {
+    throw new Kosa8Error('give ttlS or deleteAfter, not both');
+  }
+  if (opts.template !== undefined) body.template = opts.template;
+  if (opts.region !== undefined) body.region = opts.region;
+  if (opts.sleepAfterS !== undefined) {
+    checkInt('sleepAfterS', opts.sleepAfterS, 0, MAX_SLEEP_AFTER_S);
+    body.sleep_after_s = opts.sleepAfterS;
+  }
+  if (opts.ttlS !== undefined) {
+    checkInt('ttlS', opts.ttlS, MIN_TTL_S, MAX_TTL_S);
+    body.ttl_s = opts.ttlS;
+  }
+  if (opts.deleteAfter !== undefined) body.delete_after = toMs(opts.deleteAfter);
+  if (opts.acceptPrice !== undefined) body.accept_price = opts.acceptPrice;
+  return body;
+}
+
+function listQuery(opts: CloudListOptions): string {
+  const q = new URLSearchParams();
+  if (opts.all) q.set('all', '1');
+  if (opts.limit !== undefined) q.set('limit', String(opts.limit));
+  if (opts.cursor !== undefined && opts.cursor !== '') q.set('cursor', opts.cursor);
+  const s = q.toString();
+  return s ? `?${s}` : '';
 }
 
 export class CloudSandboxes {
   constructor(private readonly cloud: Kosa8Cloud) {}
 
-  /** Start a sandbox; resolves once it is running. */
+  /**
+   * Start a sandbox; resolves once it is running. Only the options you set
+   * are sent. `ttlS` (60..7776000) and `deleteAfter` are checked before any
+   * request, and only one of them may be given.
+   */
   async create(opts: CloudCreateOptions = {}): Promise<CloudSandbox> {
-    const body: Json = {};
-    if (opts.template !== undefined) body.template = opts.template;
-    if (opts.region !== undefined) body.region = opts.region;
-    if (opts.sleepAfterS !== undefined) body.sleep_after_s = opts.sleepAfterS;
+    const body = createBody(opts);
     const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body);
     return new CloudSandbox(this.cloud, r.sandbox);
   }
 
-  /** The org's sandboxes; with all, deleted ones too. */
-  async list(opts: { all?: boolean } = {}): Promise<CloudSandbox[]> {
-    const r = await this.cloud.request<{ sandboxes: CloudSandboxInfo[] }>('GET', `/v1/sandboxes${opts.all ? '?all=1' : ''}`);
-    return r.sandboxes.map((s) => new CloudSandbox(this.cloud, s));
+  /** The org's sandboxes (one page); with all, deleted ones too. */
+  async list(opts: CloudListOptions = {}): Promise<CloudSandbox[]> {
+    return (await this.listPage(opts)).sandboxes;
+  }
+
+  /**
+   * One page of sandboxes and the cursor for the next. Servers without
+   * pagination answer everything at once, with no cursor (`nextCursor: null`).
+   */
+  async listPage(opts: CloudListOptions = {}): Promise<CloudSandboxPage> {
+    const r = await this.cloud.request<{ sandboxes?: CloudSandboxInfo[]; next_cursor?: string | null }>(
+      'GET', `/v1/sandboxes${listQuery(opts)}`,
+    );
+    const nextCursor = typeof r.next_cursor === 'string' && r.next_cursor !== '' ? r.next_cursor : null;
+    return { sandboxes: (r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s)), nextCursor };
+  }
+
+  /**
+   * Every sandbox, page by page, following `nextCursor` until there is none.
+   * Stops if the server repeats a cursor.
+   */
+  async *iterate(opts: Omit<CloudListOptions, 'cursor'> = {}): AsyncGenerator<CloudSandbox, void, undefined> {
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.listPage({ ...opts, ...(cursor !== undefined ? { cursor } : {}) });
+      yield* page.sandboxes;
+      if (page.nextCursor === null || seen.has(page.nextCursor)) return;
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
   }
 
   async get(id: string): Promise<CloudSandbox> {
@@ -253,9 +498,20 @@ export class CloudSandbox {
     return `/v1/sandboxes/${encodeURIComponent(this.info.id)}${suffix}`;
   }
 
+  /** Files in the sandbox. Needs the host's data plane (see `CloudSandboxFiles`). */
+  get files(): CloudSandboxFiles {
+    return new CloudSandboxFiles(this.cloud, this.path());
+  }
+
   /**
-   * Run a command and wait for it. A string runs through `sh -c`. A
-   * sleeping sandbox wakes for it.
+   * Run a command and wait for it. A string runs through `sh -c` (busybox sh
+   * on the base template). A sleeping sandbox wakes for it.
+   *
+   * Each exec runs in a fresh container; only `/workspace` persists between
+   * calls. The request body is capped at 64 KiB (413 too_large). A buffered
+   * exec is cut off after about 30 s by the Cloud API today, raised as
+   * `Kosa8ExecTimeoutError`; run long jobs in the background
+   * (`nohup cmd > /workspace/out.log 2>&1 &`) and poll.
    */
   async exec(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudExecResult> {
     const argv = typeof cmd === 'string' ? ['sh', '-c', cmd] : cmd;
@@ -289,6 +545,150 @@ export class CloudSandbox {
 
   async delete(): Promise<void> {
     await this.cloud.request('DELETE', this.path());
+  }
+
+  /**
+   * Change its lifetime or sleep timer. `{ ttlS: null }` (or
+   * `{ deleteAfter: null }`) clears the lifetime. Returns the server's notes,
+   * if any; `info` is refreshed.
+   */
+  async update(opts: CloudUpdateOptions): Promise<{ sandbox: CloudSandboxInfo; notes: string[] }> {
+    const body: Json = {};
+    if (opts.ttlS !== undefined && opts.deleteAfter !== undefined) {
+      throw new Kosa8Error('give ttlS or deleteAfter, not both');
+    }
+    if (opts.ttlS !== undefined) {
+      if (opts.ttlS !== null) checkInt('ttlS', opts.ttlS, MIN_TTL_S, MAX_TTL_S);
+      body.ttl_s = opts.ttlS;
+    }
+    if (opts.deleteAfter !== undefined) body.delete_after = opts.deleteAfter === null ? null : toMs(opts.deleteAfter);
+    if (opts.sleepAfterS !== undefined) {
+      checkInt('sleepAfterS', opts.sleepAfterS, 0, MAX_SLEEP_AFTER_S);
+      body.sleep_after_s = opts.sleepAfterS;
+    }
+    if (Object.keys(body).length === 0) throw new Kosa8Error('update needs ttlS, deleteAfter or sleepAfterS');
+    const r = await this.cloud.request<{ sandbox: CloudSandboxInfo; notes?: string[] }>('PATCH', this.path(), body);
+    this.info = r.sandbox;
+    return { sandbox: r.sandbox, notes: r.notes ?? [] };
+  }
+
+  /**
+   * Save memory, processes and disk as a checkpoint (the newest 10 are kept).
+   *
+   * Needs the host's data plane; on hosts without it the API answers 501
+   * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`.
+   * Not every kosa8 Cloud host has it yet.
+   */
+  async checkpoint(label?: string): Promise<CloudCheckpoint> {
+    if (label !== undefined && label.length > 200) throw new Kosa8Error('a checkpoint label is at most 200 characters');
+    const r = await this.cloud.request<{ checkpoint: CloudCheckpoint }>(
+      'POST', this.path('/checkpoints'), label !== undefined ? { label } : {},
+    );
+    return r.checkpoint;
+  }
+
+  /**
+   * Its checkpoints, oldest first. Does not wake a sleeping sandbox.
+   *
+   * Needs the host's data plane; on hosts without it the API answers 501
+   * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`.
+   * Not every kosa8 Cloud host has it yet.
+   */
+  async checkpoints(): Promise<CloudCheckpoint[]> {
+    return (await this.cloud.request<{ checkpoints?: CloudCheckpoint[] }>('GET', this.path('/checkpoints'))).checkpoints ?? [];
+  }
+
+  /**
+   * Go back to a checkpoint (a CloudCheckpoint or its id). The sandbox as it
+   * was is saved first, as `backup`. `info` is refreshed.
+   *
+   * Needs the host's data plane; on hosts without it the API answers 501
+   * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`.
+   * Not every kosa8 Cloud host has it yet.
+   */
+  async rewind(checkpoint: string | CloudCheckpoint): Promise<CloudRewindResult> {
+    const id = typeof checkpoint === 'string' ? checkpoint : checkpoint.id;
+    if (!id) throw new Kosa8Error('rewind needs a checkpoint id');
+    const r = await this.cloud.request<{ sandbox: CloudSandboxInfo; checkpoint: CloudCheckpoint; backup: CloudCheckpoint; ms?: number | null }>(
+      'POST', this.path('/rewind'), { checkpoint_id: id },
+    );
+    if (r.sandbox) this.info = r.sandbox;
+    return { checkpoint: r.checkpoint, backup: r.backup, ms: r.ms ?? null };
+  }
+
+  /**
+   * Make `n` (1..100) copies of the sandbox as it is now, on its host; all
+   * or nothing.
+   *
+   * Needs the host's data plane; on hosts without it the API answers 501
+   * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`.
+   * Not every kosa8 Cloud host has it yet.
+   */
+  async fork(n = 1): Promise<CloudSandbox[]> {
+    checkInt('n', n, 1, MAX_FORK_N);
+    const r = await this.cloud.request<{ sandboxes?: CloudSandboxInfo[] }>('POST', this.path('/fork'), { n });
+    return (r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s));
+  }
+
+  /**
+   * TCP ports listening in its running containers.
+   *
+   * Needs the host's data plane; on hosts without it the API answers 501
+   * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`.
+   * Not every kosa8 Cloud host has it yet.
+   */
+  async ports(): Promise<CloudPort[]> {
+    return (await this.cloud.request<{ ports?: CloudPort[] }>('GET', this.path('/ports'))).ports ?? [];
+  }
+}
+
+/**
+ * Files in a cloud sandbox, up to 8 MiB each. A sleeping sandbox wakes first.
+ *
+ * Needs the host's data plane; on hosts without it the API answers 501
+ * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`. Not
+ * every kosa8 Cloud host has it yet.
+ */
+export class CloudSandboxFiles {
+  constructor(private readonly cloud: Kosa8Cloud, private readonly base: string) {}
+
+  private q(suffix: string, path: string, extra = ''): string {
+    return `${this.base}${suffix}?path=${encodeURIComponent(path)}${extra}`;
+  }
+
+  /** A file's bytes. */
+  read(path: string): Promise<Uint8Array> {
+    return this.cloud.requestBytes('GET', this.q('/files', path));
+  }
+
+  /** A file as UTF-8 text. */
+  async readText(path: string): Promise<string> {
+    return new TextDecoder().decode(await this.read(path));
+  }
+
+  /** Write a file (a string is written as UTF-8). Its parent folder must exist. */
+  async write(path: string, data: string | Uint8Array): Promise<CloudFileInfo> {
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const out = await this.cloud.requestBytes('PUT', this.q('/files', path), bytes);
+    const r = JSON.parse(new TextDecoder().decode(out) || '{}') as { file?: CloudFileInfo | null };
+    return r.file ?? { path };
+  }
+
+  /** A folder's entries (default /workspace). */
+  async list(path = '/workspace'): Promise<CloudFileInfo[]> {
+    return (await this.cloud.request<{ files?: CloudFileInfo[] }>('GET', this.q('/files/list', path))).files ?? [];
+  }
+
+  /** Make a folder and its parents. */
+  async mkdir(path: string): Promise<CloudFileInfo> {
+    const r = await this.cloud.request<{ file?: CloudFileInfo | null }>('POST', `${this.base}/files/mkdir`, { path });
+    return r.file ?? { path, type: 'dir' };
+  }
+
+  /** Remove a file, or a folder and everything in it with `recursive`. Resolves with the removed path. */
+  async delete(path: string, opts: { recursive?: boolean } = {}): Promise<string> {
+    const r = await this.cloud.request<{ removed?: string }>('DELETE', this.q('/files', path, opts.recursive ? '&recursive=1' : ''));
+    return r.removed ?? path;
   }
 }
 

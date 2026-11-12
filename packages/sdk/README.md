@@ -1,13 +1,150 @@
 # @kosa8/sdk
 
-Typed TypeScript client for the [kosa8](https://kosa8.com) native API. kosa8 gives every AI agent its own sealed machine: a real microVM with its own kernel, with the network closed except for the hosts on an allow-list you write. This package talks to the kosa8 daemon over its unix socket. It covers sandboxes, running and exec'ing commands, the sandbox toolbox (code, files, git, shell sessions, terminals, previews, lifecycle, templates), checkpoint and rewind, fork, explore, and snapshots.
+Typed TypeScript client for [kosa8](https://kosa8.com). kosa8 gives every AI agent its own sealed machine. This package talks to both places those machines run:
 
-- No runtime dependencies. It uses Node's own `http` with `socketPath`.
-- ESM and CommonJS builds with `.d.ts` types. Node 18 or later.
-- Every endpoint, field and response shape comes from the daemon's source.
-- Errors are typed and keep the daemon's own words: what went wrong, and what to do about it.
+- **kosa8 Cloud** (`Kosa8Cloud`): sandboxes on kosa8's hosts, over HTTPS at `https://api.kosa8.com`, with an API key. Nothing to install.
+- **The local daemon** (`Kosa8Client`): microVMs on your own Mac or Linux box, over the daemon's unix socket, with egress allow-lists, the sandbox toolbox, checkpoint and rewind, fork, explore and snapshots.
 
-## Requirements
+No runtime dependencies. ESM and CommonJS builds with `.d.ts` types. Node 18 or later. Errors are typed and keep the server's own words.
+
+## kosa8 Cloud quickstart
+
+```sh
+npm install @kosa8/sdk@^0.4.0
+export KOSA8_API_KEY=k8c_live_...   # make one at https://app.kosa8.com
+```
+
+```ts
+import { Kosa8Cloud } from '@kosa8/sdk';
+
+const cloud = new Kosa8Cloud(); // reads KOSA8_API_KEY; talks to https://api.kosa8.com
+
+// Deleted automatically in an hour, even if this script dies.
+const box = await cloud.sandboxes.create({ ttlS: 3600 });
+
+const r = await box.exec('echo hello > /workspace/hi.txt && cat /workspace/hi.txt');
+console.log(r.exitCode, r.stdout); // 0 "hello\n"
+
+// Files (needs the host's data plane; see below).
+await box.files.write('/workspace/data.json', JSON.stringify({ n: 42 }));
+console.log(await box.files.readText('/workspace/data.json'));
+console.log((await box.files.list()).map((f) => f.name)); // /workspace by default
+
+await box.delete();
+```
+
+`KOSA8_CLOUD_URL` overrides the address (https only, except localhost). Pass `{ apiKey, baseUrl }` to the constructor instead of using the environment if you prefer.
+
+### The base template
+
+With no `template`, a sandbox starts from the org's default, `base`:
+
+- Alpine Linux. `sh` is busybox: there is **no bash, python or git**. For Python, create with `{ template: 'python' }`, or pick another from `await cloud.templates()`.
+- **Each exec runs in a fresh container; only `/workspace` persists** between calls. Install packages into `/workspace` (for example `pip install --target /workspace/lib ...` on the `python` template), not into the system.
+- A buffered `exec` is cut off after about **30 s** by the Cloud API today, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background and poll:
+
+  ```ts
+  await box.exec("nohup sh -c 'sleep 120; echo done' > /workspace/job.log 2>&1 &");
+  // later
+  console.log((await box.exec('cat /workspace/job.log')).stdout);
+  ```
+
+- A request body is at most **64 KiB** (`413 too_large`), so send big inputs as files. A file is at most **8 MiB** through the API.
+
+### Sandboxes
+
+| method | endpoint |
+| --- | --- |
+| `cloud.sandboxes.create({ template?, region?, sleepAfterS?, ttlS?, deleteAfter?, acceptPrice? })` → `CloudSandbox` | `POST /v1/sandboxes` |
+| `cloud.sandboxes.list({ all?, limit?, cursor? })` → `CloudSandbox[]` | `GET /v1/sandboxes` |
+| `cloud.sandboxes.listPage({ all?, limit?, cursor? })` → `{ sandboxes, nextCursor }` | `GET /v1/sandboxes` |
+| `cloud.sandboxes.iterate({ all?, limit? })` → async iterable of `CloudSandbox` | every page, following `nextCursor` |
+| `cloud.sandboxes.get(id)` → `CloudSandbox` | `GET /v1/sandboxes/{id}` |
+| `cloud.templates()` → `CloudTemplate[]` | `GET /v1/templates` |
+| `box.exec(cmd, { image?, env? })` → `{ exitCode, stdout, stderr, wokeMs? }` | `POST …/exec` (a string runs through `sh -c`) |
+| `box.update({ ttlS?, deleteAfter?, sleepAfterS? })` → `{ sandbox, notes }` | `PATCH /v1/sandboxes/{id}`; `{ ttlS: null }` clears the lifetime |
+| `box.sleep()`, `box.wake()`, `box.refresh()`, `box.delete()` | `POST …/sleep`, `POST …/wake`, `GET`, `DELETE` |
+
+`ttlS` is seconds from now (60 to 7776000, 90 days); `deleteAfter` is a time (Unix ms or a `Date`). Give one or the other; both are checked before any request is made. `sleepAfterS` is idle seconds before the sandbox sleeps (0 to 604800; 0 never). `acceptPrice` is for a paid kosa8 Store item: its current price in USD, which the person agreed to. `box.info` is a `CloudSandboxInfo`: `state`, `template`, `source` (`pool`, `restore`, `cold` or `fork`), `parent_id`, `delete_after`, `sleep_after_s`, `host_unreachable`, `origin_item_version`, `region`, `own_host`, `cost_usd` and the rest of the API's Sandbox schema.
+
+The Cloud API is adding cursor pagination. Until it has, `limit` and `cursor` are ignored, every sandbox comes back at once and `nextCursor` is `null`; `iterate()` works either way.
+
+### Files, checkpoints, rewind, fork and ports (data plane)
+
+These need the host's data plane. On hosts without it the API answers 501 (`not_available`/`not_supported`), thrown as `Kosa8UnsupportedError`: they may answer 501 on current hosts, because not every kosa8 Cloud host has the data plane yet. `GET /v1/capabilities` says whether your org's hosts have it.
+
+| method | endpoint |
+| --- | --- |
+| `box.files.read(path)` → `Uint8Array`, `box.files.readText(path)` → `string` | `GET …/files?path=` (raw bytes) |
+| `box.files.write(path, string \| Uint8Array)` → `CloudFileInfo` | `PUT …/files?path=` (raw bytes) |
+| `box.files.list(path = '/workspace')` → `CloudFileInfo[]` | `GET …/files/list?path=` |
+| `box.files.mkdir(path)` → `CloudFileInfo` | `POST …/files/mkdir` |
+| `box.files.delete(path, { recursive? })` → the removed path | `DELETE …/files?path=` |
+| `box.checkpoint(label?)` → `CloudCheckpoint` | `POST …/checkpoints` (the newest 10 are kept) |
+| `box.checkpoints()` → `CloudCheckpoint[]` | `GET …/checkpoints` (oldest first) |
+| `box.rewind(checkpointOrId)` → `{ checkpoint, backup, ms }` | `POST …/rewind` (the state before is saved as `backup`) |
+| `box.fork(n = 1)` → `CloudSandbox[]` | `POST …/fork` (1 to 100 copies, all or nothing) |
+| `box.ports()` → `{ port, address, container, loopback }[]` | `GET …/ports` |
+
+```ts
+const cp = await box.checkpoint('before the risky bit');
+await box.exec('rm -rf /workspace/*');
+await box.rewind(cp);                 // /workspace is back
+const [copy] = await box.fork(1);     // a second sandbox, as this one is now
+```
+
+The Cloud API has no sandbox labels or metadata.
+
+### Functions
+
+```ts
+await cloud.functions.deploy('hello', {
+  runtime: 'python3.12',
+  code: 'def handler(event):\n    return {"hello": event.get("name", "world")}\n',
+});
+const out = await cloud.functions.invoke('hello', { name: 'kosa8' });
+console.log(out.ok, out.result); // true { hello: 'kosa8' }
+```
+
+`cloud.functions` also has `list`, `get`, `delete` and `map`. `cloud.me()` and `cloud.usage()` answer the org and this month's bill.
+
+### Cloud errors
+
+Every error from the cloud is a `Kosa8Error` with the cloud's stable `code`, its sentence as `message`, `status`, and the whole answer as `body`.
+
+| class | when |
+| --- | --- |
+| `Kosa8PaymentRequiredError` | 402: `code` is `payment_required`, `spending_cap_reached`, `price_not_accepted`, … `upgradeUrl` is where the person adds a card or credit and `agentMessage` is a sentence an agent should relay word for word (each `null` when absent) |
+| `Kosa8OrgFrozenError` | 423 `org_frozen`: the org is frozen in the Security Center; an owner or admin must unfreeze it |
+| `Kosa8RateLimitError` | 429: rate limited or a quota reached (`quota_exceeded`); `retryAfter` is the Retry-After header in seconds, when sent |
+| `Kosa8ExecTimeoutError` | a buffered exec ran past about 30 s (504, `exec_timeout`, or a 502 `host_failed` on exec that timed out); run the job in the background instead |
+| `Kosa8UnsupportedError` | 501 `not_available`/`not_supported`: this host has no data plane yet |
+| `Kosa8NotFoundError`, `Kosa8BadRequestError`, `Kosa8AuthError`, `Kosa8ConflictError` | 404, 400, 401, 409 |
+| `Kosa8ConnectionError`, `Kosa8TimeoutError` | the cloud could not be reached, or did not answer in time (default 120 s, `timeoutMs`) |
+
+```ts
+import { Kosa8Cloud, Kosa8ExecTimeoutError, Kosa8PaymentRequiredError } from '@kosa8/sdk';
+
+const cloud = new Kosa8Cloud();
+try {
+  const box = await cloud.sandboxes.create({ ttlS: 600 });
+  await box.exec('sleep 45');
+} catch (err) {
+  if (err instanceof Kosa8PaymentRequiredError) {
+    console.log(err.code, err.agentMessage ?? err.message, err.upgradeUrl);
+  } else if (err instanceof Kosa8ExecTimeoutError) {
+    console.log('run it in the background:', err.message);
+  } else {
+    throw err;
+  }
+}
+```
+
+## Local daemon
+
+`Kosa8Client` talks to the kosa8 daemon on your own machine over its unix socket. It covers sandboxes, running and exec'ing commands, the sandbox toolbox (code, files, git, shell sessions, terminals, previews, lifecycle, templates), checkpoint and rewind, fork, explore, and snapshots. Every endpoint, field and response shape comes from the daemon's source.
+
+### Requirements
 
 - kosa8 installed, with its daemon running (`kosa8 daemon start`). Install it with:
 
@@ -18,13 +155,13 @@ Typed TypeScript client for the [kosa8](https://kosa8.com) native API. kosa8 giv
 - macOS on Apple silicon, or x86-64 Linux.
 - Node.js 18 or later.
 
-## Install
+### Install
 
 ```sh
-npm install @kosa8/sdk
+npm install @kosa8/sdk@^0.4.0
 ```
 
-## Quickstart
+### Quickstart
 
 ```ts
 import { Kosa8Client } from '@kosa8/sdk';
@@ -65,15 +202,15 @@ await kosa8.deleteSandbox('demo');
 
 `kosa8.sandbox('demo')` returns a handle with the same methods, already bound to that sandbox (`run`, `exec`, `checkpoint`, `rewind`, `fork` and the rest).
 
-## How commands run
+### How commands run
 
 A kosa8 sandbox is a microVM that runs its own container engine. `run` starts a container from an image and runs it to completion. `startContainer` starts a detached one, and `exec` runs a command in it. A sandbox's engine does not pull images by itself, so pull first with `pullIntoSandbox`. The image is fetched on the host and checked against your org's registry policy, so pulling works even when the sandbox has no network.
 
-## API reference
+### API reference
 
 All methods return promises. Every method takes `{ approval?, signal? }` as its last argument: `approval` is a signed-approval id (see Errors), and `signal` is an `AbortSignal`.
 
-### Client
+#### Client
 
 `new Kosa8Client(options?)`
 
@@ -94,7 +231,7 @@ CLI saved (`kosa8 wsl setup` on Windows, where the engine runs in WSL2, or
 So on Windows, once `kosa8 wsl setup` has run, `new Kosa8Client()` reaches the
 WSL2 engine with no configuration.
 
-### Status
+#### Status
 
 | method | endpoint |
 | --- | --- |
@@ -102,7 +239,7 @@ WSL2 engine with no configuration.
 | `version()` → `string` | `GET /kosa8/v1/health` |
 | `pull(ref)` | `POST /kosa8/v1/pull` (host engine) |
 
-### Sandboxes
+#### Sandboxes
 
 | method | endpoint |
 | --- | --- |
@@ -118,7 +255,7 @@ WSL2 engine with no configuration.
 
 `egress` takes `'deny'`, `'any'`, `'fakenet'`, `'allow:a.com,*.b.com,10.0.0.0/8'` or `{ allow: [...] }`. `egressAllow: [...]` is shorthand for the allow-list. If you set neither, the daemon applies the org policy's default egress, or `any` when there is none. `broker` puts the sandbox behind kosa8's egress broker: real credentials stay on the host and the sandbox holds only placeholders (returned in `broker.placeholders`). `autoStopMin` stops the sandbox after that many idle minutes, `ttlMin` that long after it was created, `autoDeleteMin` deletes it once it has been stopped that long, and `ephemeral` deletes it whenever it stops. `template` starts it with a template's image (see Toolbox).
 
-### Run and exec
+#### Run and exec
 
 | method | endpoint |
 | --- | --- |
@@ -132,7 +269,7 @@ WSL2 engine with no configuration.
 
 `ExecResult` is `{ exitCode, stdout, stderr, stdoutBytes, stderrBytes }`. A non-zero exit code is a result, not an error.
 
-### Toolbox
+#### Toolbox
 
 The toolbox is for agents that want to work in a sandbox the way they work on a laptop: run a snippet, read and write files, use git, keep a shell. None of it needs an image pulled first; the daemon picks one (or the sandbox template's).
 
@@ -173,7 +310,7 @@ console.log((await sb.shell('echo $FOO; pwd')).stdout); // "bar\n/tmp\n"
 
 `CodeResult` is `{ ok, exitCode, stdout, stderr, language, image, artifacts, durationMs, timedOut, truncated }` and `ShellResult` is `{ ok, exitCode, stdout, stderr, cwd, durationMs, timedOut, truncated }`. As with `run`, a non-zero exit code is a result, and so is a git failure (`ok: false`). Only a refusal throws. `buildTemplate` packs the context directory as a tar, leaving out what `.dockerignore` names (paths and their prefixes), builds it in a throwaway sandbox, and keeps the image, so that `createSandbox({ template })` starts from it. A failed build throws `Kosa8StreamError`. The sandbox handle has every per-sandbox toolbox method, with the sandbox id already bound (`sb.runCode(code)`, `sb.sessions()`, …).
 
-### Snapshots, fork, explore
+#### Snapshots, fork, explore
 
 | method | endpoint |
 | --- | --- |
@@ -186,7 +323,7 @@ console.log((await sb.shell('echo $FOO; pwd')).stdout); // "bar\n/tmp\n"
 
 `explore` forks the sandbox once per variant and runs `sh -c VARIANT` in `image` (default `alpine:latest`) in every branch at the same time. It keeps the fastest successful branch and deletes the others. It pulls `image` into the parent first, so every branch already has it (turn this off with `pull: false`).
 
-### Checkpoints
+#### Checkpoints
 
 | method | |
 | --- | --- |
@@ -196,37 +333,7 @@ console.log((await sb.shell('echo $FOO; pwd')).stdout); // "bar\n/tmp\n"
 
 The daemon has no checkpoint endpoint. Checkpoints are bookkeeping kept on the client side over snapshots, exactly as in the kosa8 CLI and MCP server. By default they go in the CLI's own store, so `kosa8 rewind` sees checkpoints you took with the SDK, and the SDK sees the CLI's. A rewind deletes the sandbox and restores the checkpoint under the same name, and checkpoints taken after the target are discarded.
 
-## kosa8 Cloud
-
-The same client shape, against kosa8 Cloud instead of the local daemon. Make
-an API key in the cloud dashboard and set `KOSA8_API_KEY`.
-
-```ts
-import { Kosa8Cloud, Kosa8PaymentRequiredError } from '@kosa8/sdk';
-
-const cloud = new Kosa8Cloud(); // or new Kosa8Cloud({ apiKey: 'k8c_live_…' })
-
-const box = await cloud.sandboxes.create({ template: 'python', sleepAfterS: 600 });
-const r = await box.exec(['python3', '-c', 'print(6 * 7)']);
-console.log(r.exitCode, r.stdout); // 0 "42\n"
-await box.sleep();   // costs only snapshot storage while asleep
-await box.exec('ls /workspace'); // wakes it, files and all
-await box.delete();
-
-await cloud.functions.deploy('hello', {
-  runtime: 'python3.12',
-  code: 'def handler(event):\n    return {"hello": event.get("name", "world")}\n',
-});
-const out = await cloud.functions.invoke('hello', { name: 'kosa8' });
-console.log(out.ok, out.result); // true { hello: 'kosa8' }
-```
-
-A new organization runs nothing until a payment method is on file; until
-then creating a sandbox throws `Kosa8PaymentRequiredError` (`code`
-`payment_required`), whose message says what to do. Every error from the
-cloud carries its stable `code`.
-
-## Errors
+### Errors
 
 Every error extends `Kosa8Error`. An error from the daemon carries `status`, `daemonMessage` (the daemon's `error`, verbatim) and `remediation` (what to do), and its `message` is `"<error> (<remediation>)"`.
 
@@ -242,6 +349,8 @@ Every error extends `Kosa8Error`. An error from the daemon carries `status`, `da
 | `Kosa8UnsupportedError` | 501: no microVM backend on this platform |
 | `Kosa8StreamError` | a run, exec or template build ended with an error frame (output so far in `stdout`/`stderr`), or a file read was cut short |
 | `Kosa8CheckpointError` | no checkpoint to rewind to, or an invalid name |
+
+The kosa8 Cloud errors (`Kosa8PaymentRequiredError`, `Kosa8OrgFrozenError`, `Kosa8RateLimitError`, `Kosa8ExecTimeoutError`) are listed under [Cloud errors](#cloud-errors).
 
 When an action needs approval, a human opens a request (`error.approval.request_command`), the approvers sign it, and you repeat the call with the id:
 
