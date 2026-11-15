@@ -65,18 +65,33 @@ describe('Kosa8Cloud', () => {
     expect(seen[0]!.body).toEqual({ template: 'python', sleep_after_s: 600 });
     expect(seen[0]!.headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(box.id).toBe('sbx_1');
+    expect(box.state).toBe('running');
 
     const r = await box.exec('python3 -c "print(6*7)"', { env: { A: '1' } });
     expect(seen[1]!.body).toEqual({ cmd: ['sh', '-c', 'python3 -c "print(6*7)"'], env: ['A=1'] });
     expect(r).toEqual({ exitCode: 0, stdout: '42\n', stderr: '', wokeMs: 70 });
 
     expect((await box.sleep()).info.state).toBe('sleeping');
+    expect(box.state).toBe('sleeping');
     expect((await box.wake()).info.state).toBe('running');
+    expect(box.state).toBe('running');
     await box.delete();
     expect(seen.map((s) => `${s.method} ${new URL(s.url).pathname}`)).toEqual([
       'POST /v1/sandboxes', 'POST /v1/sandboxes/sbx_1/exec', 'POST /v1/sandboxes/sbx_1/sleep',
       'POST /v1/sandboxes/sbx_1/wake', 'DELETE /v1/sandboxes/sbx_1',
     ]);
+  });
+
+  it('has state right after create, list and get, the same as the other SDKs', async () => {
+    const { f } = stub((s) => {
+      if (s.method === 'POST') return [201, { sandbox: sbx({ state: 'creating' }) }];
+      if (s.url.includes('/v1/sandboxes?') || s.url.endsWith('/v1/sandboxes')) return [200, { sandboxes: [sbx({ state: 'sleeping' })], next_cursor: null }];
+      return [200, { sandbox: sbx({ state: 'stopped' }) }];
+    });
+    const cloud = new Kosa8Cloud({ apiKey: KEY, baseUrl: 'https://cp.test', env: {}, fetch: f });
+    expect((await cloud.sandboxes.create({ wait: false })).state).toBe('creating');
+    expect((await cloud.sandboxes.list())[0]!.state).toBe('sleeping');
+    expect((await cloud.sandboxes.get('sbx_1')).state).toBe('stopped');
   });
 
   it('invokes and maps functions', async () => {

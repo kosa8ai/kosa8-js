@@ -485,7 +485,7 @@ export class Kosa8Cloud {
 }
 
 const EXEC_LIMIT_HINT =
-  'a buffered kosa8 Cloud exec is cut off after about 30 s; run long jobs in the background ' +
+  'a buffered kosa8 Cloud exec is stopped after 90 s; run long jobs in the background ' +
   "(sh -c 'nohup cmd > /workspace/out.log 2>&1 &') and poll /workspace for the result";
 
 /**
@@ -654,6 +654,11 @@ export class CloudSandbox {
     return this.info.id;
   }
 
+  /** Its state as of the last call (`info.state`), e.g. `running` right after create. */
+  get state(): CloudSandboxInfo['state'] {
+    return this.info.state;
+  }
+
   private path(suffix = ''): string {
     return `/v1/sandboxes/${encodeURIComponent(this.info.id)}${suffix}`;
   }
@@ -669,8 +674,8 @@ export class CloudSandbox {
    *
    * Each exec runs in a fresh container; only `/workspace` persists between
    * calls. The request body is capped at 64 KiB (413 too_large). A buffered
-   * exec is cut off after about 30 s by the Cloud API today, raised as
-   * `Kosa8ExecTimeoutError`; run long jobs in the background
+   * exec runs at most 90 s: past that the Cloud API stops the command and
+   * answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`; run long jobs in the background
    * (`nohup cmd > /workspace/out.log 2>&1 &`) and poll.
    */
   async exec(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudExecResult> {
