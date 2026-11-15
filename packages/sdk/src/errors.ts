@@ -59,6 +59,8 @@ export interface Kosa8ErrorOptions {
   cause?: unknown;
   /** kosa8 Cloud's stable error code, such as payment_required. */
   code?: string;
+  /** Seconds from a Retry-After header, when the answer had one. */
+  retryAfter?: number;
 }
 
 /** Base class of every error this SDK throws. */
@@ -146,11 +148,51 @@ export class Kosa8StreamError extends Kosa8Error {
   }
 }
 
-/** kosa8 Cloud refused new work until a payment method is on file (402). */
-export class Kosa8PaymentRequiredError extends Kosa8ApiError {}
+function bodyString(body: unknown, key: string): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const v = (body as Record<string, unknown>)[key];
+  return typeof v === 'string' && v !== '' ? v : null;
+}
+
+/**
+ * kosa8 Cloud refused new work until it is paid for (402). `code` says why:
+ * payment_required, spending_cap_reached, price_not_accepted, ...
+ */
+export class Kosa8PaymentRequiredError extends Kosa8ApiError {
+  /** Where the person adds a payment method or credit; null when the answer had none. */
+  get upgradeUrl(): string | null {
+    return bodyString(this.body, 'upgrade_url');
+  }
+
+  /** A sentence an AI agent should relay to its person word for word; null when absent. */
+  get agentMessage(): string | null {
+    return bodyString(this.body, 'agent_message');
+  }
+}
 
 /** Too many requests or a quota reached (429). */
-export class Kosa8RateLimitError extends Kosa8ApiError {}
+export class Kosa8RateLimitError extends Kosa8ApiError {
+  /** Seconds to wait, from the Retry-After header; undefined when there was none. */
+  readonly retryAfter?: number;
+  constructor(message: string, options: Kosa8ErrorOptions = {}) {
+    super(message, options);
+    this.retryAfter = options.retryAfter;
+  }
+}
+
+/**
+ * 423 org_frozen: the organization is frozen in the kosa8 Cloud Security
+ * Center. An owner or admin must unfreeze it before new work runs.
+ */
+export class Kosa8OrgFrozenError extends Kosa8ApiError {}
+
+/**
+ * A buffered kosa8 Cloud exec ran past the API's limit (about 30 s today).
+ * Raised for HTTP 504, for code exec_timeout, and for a 502 host_failed on
+ * /exec that says it timed out. Run long jobs in the background instead
+ * (`nohup cmd > /workspace/out.log 2>&1 &`) and poll for the result.
+ */
+export class Kosa8ExecTimeoutError extends Kosa8ApiError {}
 
 /** A client-side checkpoint operation failed (no checkpoint, bad name, ...). */
 export class Kosa8CheckpointError extends Kosa8Error {}
@@ -167,7 +209,7 @@ function isRefusal(v: unknown): v is ApprovalRefusal {
 export function errorFromResponse(
   status: number,
   body: unknown,
-  ctx: { method?: string; path?: string; code?: string } = {},
+  ctx: { method?: string; path?: string; code?: string; body?: unknown; retryAfter?: number } = {},
 ): Kosa8ApiError {
   let daemonMessage: string | undefined;
   let remediation: string | undefined;
@@ -200,6 +242,8 @@ export function errorFromResponse(
       return new Kosa8PaymentRequiredError(message, opts);
     case 409:
       return new Kosa8ConflictError(message, opts);
+    case 423:
+      return new Kosa8OrgFrozenError(message, opts);
     case 429:
       return new Kosa8RateLimitError(message, opts);
     case 501:

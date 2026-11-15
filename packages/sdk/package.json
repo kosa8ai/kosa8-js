@@ -1,6 +1,6 @@
 {
   "name": "@kosa8/sdk",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Typed TypeScript client for the kosa8 native API: microVM sandboxes for AI agents, with checkpoint, rewind, fork and explore.",
   "license": "MIT",
   "author": "kosa8",
