@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased
-
 The rest of the kosa8 Cloud API.
 
 - Sized and Docker creates: `cloud.sandboxes.create` takes `size` (`2x4`, `4x8`, `8x16`, `16x32`; `CLOUD_SIZES`), `cpus`+`memMb`, `image` (e.g. `kosa8-template/universal-24.04-20261115.2`), `diskGb`, `persistent`, `docker`, `cpu: 'dedicated'`, `name`, `env`, `egress`, `secrets`, `labels` and `snapshot`. A cold boot (202 `creating`) is waited for unless `wait: false`; `box.waitUntilRunning()`. Conflicting options are refused before any request.
@@ -12,7 +10,7 @@ The rest of the kosa8 Cloud API.
 - Secrets: `cloud.secrets.set|list|delete` (values go in a body, never come back).
 - Pipelines: `cloud.pipelines.run|list|get|logs|cancel|artifacts|downloadArtifact|wait` and `cloud.pipelines.hooks.create|list|delete`.
 
-## 0.4.0 — 2026-11-12
+## 0.4.0 — 2026-11-15
 
 kosa8 Cloud parity with the Cloud API (and the Python SDK).
 
