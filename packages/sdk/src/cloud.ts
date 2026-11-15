@@ -26,6 +26,28 @@ import {
   Kosa8TimeoutError,
   errorFromResponse,
 } from './errors.js';
+import {
+  CloudBackgroundExec,
+  CloudCodeContexts,
+  CloudPipelines,
+  CloudPreviews,
+  CloudSchedules,
+  CloudSecrets,
+  CloudSnapshots,
+  envList,
+} from './cloud-features.js';
+import type {
+  CloudBackgroundExecInfo,
+  CloudCodeOptions,
+  CloudCodeRun,
+  CloudEgress,
+  CloudEgressPolicy,
+  CloudFileLink,
+  CloudLogEntry,
+  CloudMetrics,
+  CloudSnapshot,
+  CloudTerminal,
+} from './cloud-features.js';
 
 export const DEFAULT_CLOUD_URL = 'https://api.kosa8.com';
 export const CLOUD_KEY_PREFIX = 'k8c_live_';
@@ -83,7 +105,22 @@ export interface CloudSandboxInfo {
   sleep_bytes?: number;
   /** Cost estimate so far, USD. */
   cost_usd: number;
+  /** Your name for it (`name` at create). */
+  name?: string | null;
+  /** The snapshot it was made from, if any. */
+  snapshot_id?: string | null;
+  image?: string | null;
+  disk_gb?: number | null;
+  persistent?: boolean;
+  docker?: boolean;
+  cpu?: 'shared' | 'dedicated' | (string & {}) | null;
+  labels?: Record<string, string>;
+  [k: string]: unknown;
 }
+
+/** vCPU x GiB sizes a sized create takes. */
+export const CLOUD_SIZES = ['2x4', '4x8', '8x16', '16x32'] as const;
+export type CloudSize = (typeof CLOUD_SIZES)[number];
 
 export interface CloudCreateOptions {
   /**
@@ -102,6 +139,48 @@ export interface CloudCreateOptions {
   deleteAfter?: number | Date;
   /** A paid kosa8 Store item only: its current price in USD, which the person agreed to. */
   acceptPrice?: number;
+  /**
+   * vCPU x GiB: 2x4, 4x8, 8x16 or 16x32. With a size, `cpus`+`memMb`,
+   * `image` or `diskGb` the sandbox boots cold at that size (needs a payment
+   * method); `create` waits until it is running unless `wait: false`.
+   */
+  size?: CloudSize | (string & {});
+  /** Or: the cpus and memMb of one of the sizes (4 and 8192 for 4x8). */
+  cpus?: number;
+  memMb?: number;
+  /**
+   * An OCI image to run, e.g. `kosa8-template/universal-24.04-20261115.2`
+   * (Ubuntu with common toolchains), `kosa8-template/universal-full-24.04-20261115.2`
+   * or any registry image.
+   */
+  image?: string;
+  /** Data disk (holds / and /workspace), 8..200 GiB; default 32. */
+  diskGb?: number;
+  /** One long-lived container: installs, $HOME and `nohup cmd &` persist between execs. */
+  persistent?: boolean;
+  /** Run a Docker engine in the sandbox (start `dockerd`); implies persistent and needs a size or image. */
+  docker?: boolean;
+  /** dedicated: whole physical cores of its own (never sleeps, no checkpoint or fork). Default shared. */
+  cpu?: 'shared' | 'dedicated';
+  /** Your name for it; `list({ name })` finds it. */
+  name?: string;
+  /** Environment variables every command in the sandbox gets. Never logged or returned. */
+  env?: Record<string, string>;
+  /**
+   * Start from a snapshot (`snap_…` or a CloudSnapshot): files, packages and
+   * processes as they were. Its template, size and image are the snapshot's.
+   */
+  snapshot?: string | CloudSnapshot;
+  /** The network policy it starts with. */
+  egress?: CloudEgressPolicy;
+  /** Names of org secrets it holds (as placeholders). */
+  secrets?: string[];
+  /** Labels to set once it is created (a second call, PUT …/labels). */
+  labels?: Record<string, string>;
+  /** Wait until a cold-booting (202 creating) sandbox is running. Default true. */
+  wait?: boolean;
+  /** How long to wait for it. Default 5 minutes. */
+  waitTimeoutMs?: number;
 }
 
 export interface CloudUpdateOptions {
@@ -120,6 +199,10 @@ export interface CloudListOptions {
   limit?: number;
   /** `nextCursor` of the previous page. */
   cursor?: string;
+  /** Only sandboxes with this name. */
+  name?: string;
+  /** Only sandboxes with these labels: `{ team: 'ml' }`; `true` matches any value. */
+  labels?: Record<string, string | true>;
 }
 
 /** One page of `cloud.sandboxes.listPage()`. */
@@ -182,7 +265,7 @@ export interface CloudTemplate {
 export interface CloudExecOptions {
   /** Image to run the command in. Defaults to the template's own image. */
   image?: string;
-  /** Environment variables for the command. */
+  /** Environment variables for the command (over the sandbox's own `env`). */
   env?: Record<string, string>;
 }
 
@@ -276,6 +359,12 @@ export class Kosa8Cloud {
   readonly baseUrl: string;
   readonly sandboxes: CloudSandboxes;
   readonly functions: CloudFunctions;
+  /** Durable snapshots. */
+  readonly snapshots: CloudSnapshots;
+  /** Org secrets (values go in, never come out). */
+  readonly secrets: CloudSecrets;
+  /** CI runs, logs, artifacts and triggers. */
+  readonly pipelines: CloudPipelines;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -293,6 +382,35 @@ export class Kosa8Cloud {
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.sandboxes = new CloudSandboxes(this);
     this.functions = new CloudFunctions(this);
+    this.snapshots = new CloudSnapshots(this);
+    this.secrets = new CloudSecrets(this);
+    this.pipelines = new CloudPipelines(this);
+  }
+
+  /** What this API offers, for feature detection. */
+  capabilities(): Promise<Json> {
+    return this.request('GET', '/v1/capabilities');
+  }
+
+  /** Named egress presets (e.g. pypi, npm) and the hosts each allows. */
+  async egressPresets(): Promise<Record<string, unknown>> {
+    return (await this.request<{ presets?: Record<string, unknown> }>('GET', '/v1/egress/presets')).presets ?? {};
+  }
+
+  /** The organization's default egress policy; null when there is none (open internet). */
+  async orgEgress(): Promise<{ default: CloudEgressPolicy; enforce: boolean; enforced?: unknown } | null> {
+    return (await this.request<{ egress: { default: CloudEgressPolicy; enforce: boolean } | null }>('GET', '/v1/org/egress')).egress;
+  }
+
+  /**
+   * Set the org's default egress policy (admin key); `null` clears it. It is
+   * pushed at once to the running and sleeping sandboxes it changes. With
+   * `enforce`, it is a ceiling sandboxes cannot widen.
+   */
+  setOrgEgress(policy: CloudEgressPolicy | null, opts: { enforce?: boolean } = {}): Promise<Json> {
+    const body: Json = { default: policy };
+    if (policy !== null && opts.enforce !== undefined) body.enforce = opts.enforce;
+    return this.request('PUT', '/v1/org/egress', body);
   }
 
   /** The org, the key in use and, for a member's key, the member. */
@@ -421,7 +539,42 @@ function createBody(opts: CloudCreateOptions): Json {
   }
   if (opts.deleteAfter !== undefined) body.delete_after = toMs(opts.deleteAfter);
   if (opts.acceptPrice !== undefined) body.accept_price = opts.acceptPrice;
+  if (opts.snapshot !== undefined) {
+    const clash = (['template', 'size', 'cpus', 'memMb', 'image', 'diskGb', 'docker', 'persistent', 'cpu', 'region'] as const)
+      .filter((k) => opts[k] !== undefined);
+    if (clash.length) {
+      throw new Kosa8Error(`a sandbox made from a snapshot takes its settings from the snapshot; leave out ${clash.join(', ')}`);
+    }
+    body.snapshot = typeof opts.snapshot === 'string' ? opts.snapshot : opts.snapshot.id;
+  }
+  if ((opts.cpus === undefined) !== (opts.memMb === undefined)) throw new Kosa8Error('give cpus and memMb together');
+  if (opts.size !== undefined && opts.cpus !== undefined) throw new Kosa8Error('give size or cpus+memMb, not both');
+  if (opts.size !== undefined) body.size = opts.size;
+  if (opts.cpus !== undefined) body.cpus = opts.cpus;
+  if (opts.memMb !== undefined) body.mem_mb = opts.memMb;
+  if (opts.image !== undefined) body.image = opts.image;
+  if (opts.diskGb !== undefined) {
+    checkInt('diskGb', opts.diskGb, 8, 200);
+    body.disk_gb = opts.diskGb;
+  }
+  if (opts.docker && opts.persistent === false) {
+    throw new Kosa8Error('a sandbox with docker is persistent; leave out persistent or set it to true');
+  }
+  if (opts.docker !== undefined) body.docker = opts.docker;
+  if (opts.persistent !== undefined) body.persistent = opts.persistent;
+  if (opts.cpu !== undefined) body.cpu = opts.cpu;
+  if (opts.name !== undefined) body.name = opts.name;
+  if (opts.env !== undefined) body.env = opts.env;
+  if (opts.egress !== undefined) body.egress = opts.egress;
+  if (opts.secrets !== undefined) body.secrets = opts.secrets;
   return body;
+}
+
+/** States a sandbox does not leave on its own while booting. */
+const SETTLED = new Set(['running', 'error', 'deleted', 'stopped', 'host_removed', 'host_lost', 'sleeping', 'paused']);
+
+function sleepFor(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function listQuery(opts: CloudListOptions): string {
@@ -429,6 +582,8 @@ function listQuery(opts: CloudListOptions): string {
   if (opts.all) q.set('all', '1');
   if (opts.limit !== undefined) q.set('limit', String(opts.limit));
   if (opts.cursor !== undefined && opts.cursor !== '') q.set('cursor', opts.cursor);
+  if (opts.name !== undefined) q.set('name', opts.name);
+  for (const [k, v] of Object.entries(opts.labels ?? {})) q.append('label', v === true ? k : `${k}=${v}`);
   const s = q.toString();
   return s ? `?${s}` : '';
 }
@@ -444,7 +599,12 @@ export class CloudSandboxes {
   async create(opts: CloudCreateOptions = {}): Promise<CloudSandbox> {
     const body = createBody(opts);
     const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body);
-    return new CloudSandbox(this.cloud, r.sandbox);
+    const box = new CloudSandbox(this.cloud, r.sandbox);
+    if (opts.wait !== false && !SETTLED.has(box.info.state)) {
+      await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
+    }
+    if (opts.labels !== undefined) await box.setLabels(opts.labels);
+    return box;
   }
 
   /** The org's sandboxes (one page); with all, deleted ones too. */
@@ -640,6 +800,138 @@ export class CloudSandbox {
   async ports(): Promise<CloudPort[]> {
     return (await this.cloud.request<{ ports?: CloudPort[] }>('GET', this.path('/ports'))).ports ?? [];
   }
+
+  /**
+   * Poll until a cold-booting sandbox (state `creating`) is running. Raises
+   * if it ends in `error` (with its `last_error`) or the time runs out.
+   */
+  async waitUntilRunning(opts: { timeoutMs?: number; intervalMs?: number } = {}): Promise<this> {
+    const limit = opts.timeoutMs ?? 300_000;
+    const deadline = Date.now() + limit;
+    const every = opts.intervalMs ?? 1000;
+    while (!SETTLED.has(this.info.state)) {
+      if (Date.now() + every > deadline) {
+        throw new Kosa8TimeoutError(`sandbox ${this.id} still ${this.info.state} after ${limit} ms`);
+      }
+      await sleepFor(every);
+      await this.refresh();
+    }
+    if (this.info.state === 'error') {
+      throw new Kosa8Error(`sandbox ${this.id} failed to start: ${this.info.last_error ?? 'no reason given'}`);
+    }
+    return this;
+  }
+
+  /**
+   * Start a command that keeps running after this returns (202). Read its
+   * state and output with `status()`, or wait for it with `wait()`.
+   *
+   * ```ts
+   * const job = await sbx.execBackground('npm run build');
+   * const done = await job.wait();
+   * console.log(done.exit, done.output);
+   * ```
+   */
+  async execBackground(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudBackgroundExec> {
+    const argv = typeof cmd === 'string' ? ['sh', '-c', cmd] : cmd;
+    const body: Json = { cmd: argv, background: true };
+    if (opts.image !== undefined) body.image = opts.image;
+    const env = envList(opts.env);
+    if (env) body.env = env;
+    const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>('POST', this.path('/exec'), body);
+    return new CloudBackgroundExec(this.cloud, this.path(), r.exec);
+  }
+
+  /** A background command by id (`bg_…`), e.g. one another process started. */
+  async getExec(execId: string): Promise<CloudBackgroundExec> {
+    const job = new CloudBackgroundExec(this.cloud, this.path(), {
+      id: execId, sandbox_id: this.id, state: 'running', pid: null, exit: null, output_path: null, exit_path: null,
+    });
+    await job.status();
+    return job;
+  }
+
+  /**
+   * Save it as a durable snapshot (memory, processes and disk), kept until
+   * deleted whatever happens to the sandbox. Start copies with
+   * `cloud.sandboxes.create({ snapshot })`.
+   */
+  async snapshot(name?: string): Promise<CloudSnapshot> {
+    const r = await this.cloud.request<{ snapshot: CloudSnapshot }>(
+      'POST', this.path('/snapshots'), name !== undefined ? { name } : {},
+    );
+    return r.snapshot;
+  }
+
+  /** Its ports at https URLs: `await sbx.previews.create(3000)`. */
+  get previews(): CloudPreviews {
+    return new CloudPreviews(this.cloud, this.path());
+  }
+
+  /** Commands it runs on a cron schedule. */
+  get schedules(): CloudSchedules {
+    return new CloudSchedules(this.cloud, this.path());
+  }
+
+  /** Its code-interpreter contexts. */
+  get codeContexts(): CloudCodeContexts {
+    return new CloudCodeContexts(this.cloud, this.path());
+  }
+
+  /**
+   * Run a Python cell in a stateful context (globals persist between calls);
+   * charts come back as `image/png` results.
+   */
+  runCode(code: string, opts: CloudCodeOptions = {}): Promise<CloudCodeRun> {
+    const body: Json = { code };
+    if (opts.context !== undefined) body.context = opts.context;
+    if (opts.language !== undefined) body.language = opts.language;
+    if (opts.timeoutS !== undefined) body.timeout_s = opts.timeoutS;
+    return this.cloud.request('POST', this.path('/code'), body);
+  }
+
+  /** A wss:// URL for an interactive terminal (PTY); open it with any WebSocket client. */
+  async terminal(opts: { cols?: number; rows?: number; command?: string[] } = {}): Promise<CloudTerminal> {
+    return (await this.cloud.request<{ terminal: CloudTerminal }>('POST', this.path('/terminal'), opts)).terminal;
+  }
+
+  /** The egress policy it runs with. */
+  async egress(): Promise<CloudEgress> {
+    return (await this.cloud.request<{ egress: CloudEgress }>('GET', this.path('/egress'))).egress;
+  }
+
+  /** Change what it may reach, at once (a sleeping sandbox when it wakes). */
+  async setEgress(policy: CloudEgressPolicy): Promise<CloudEgress> {
+    return (await this.cloud.request<{ egress: CloudEgress }>('PUT', this.path('/egress'), policy)).egress;
+  }
+
+  /** Back to the organization's default egress policy. */
+  async resetEgress(): Promise<CloudEgress> {
+    return (await this.cloud.request<{ egress: CloudEgress }>('DELETE', this.path('/egress'))).egress;
+  }
+
+  /** Names of the org secrets it holds (never values). */
+  async secrets(): Promise<string[]> {
+    return (await this.cloud.request<{ secrets?: string[] }>('GET', this.path('/secrets'))).secrets ?? [];
+  }
+
+  /** Replace its labels (up to 16); `{}` clears them. */
+  async setLabels(labels: Record<string, string>): Promise<Record<string, string>> {
+    const r = await this.cloud.request<{ labels: Record<string, string> }>('PUT', this.path('/labels'), { labels });
+    this.info = { ...this.info, labels: r.labels };
+    return r.labels;
+  }
+
+  /** CPU, memory, disk and network use, read on the host. */
+  async metrics(): Promise<CloudMetrics> {
+    return (await this.cloud.request<{ metrics: CloudMetrics }>('GET', this.path('/metrics'))).metrics;
+  }
+
+  /** Its last commands, with exit codes and output tails. */
+  async logs(opts: { limit?: number } = {}): Promise<CloudLogEntry[]> {
+    const q = opts.limit !== undefined ? `?limit=${opts.limit}` : '';
+    return (await this.cloud.request<{ entries?: CloudLogEntry[] }>('GET', this.path(`/logs${q}`))).entries ?? [];
+  }
 }
 
 /**
@@ -683,6 +975,39 @@ export class CloudSandboxFiles {
   async mkdir(path: string): Promise<CloudFileInfo> {
     const r = await this.cloud.request<{ file?: CloudFileInfo | null }>('POST', `${this.base}/files/mkdir`, { path });
     return r.file ?? { path, type: 'dir' };
+  }
+
+  /** A file's bytes with no 8 MiB cap (the streamed endpoint). */
+  readRaw(path: string): Promise<Uint8Array> {
+    return this.cloud.requestBytes('GET', this.q('/files/raw', path));
+  }
+
+  /** Write a file with no 8 MiB cap (the streamed endpoint). */
+  async writeRaw(path: string, data: string | Uint8Array): Promise<CloudFileInfo> {
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const out = await this.cloud.requestBytes('PUT', this.q('/files/raw', path), bytes);
+    let r: { file?: CloudFileInfo | null } = {};
+    try {
+      r = JSON.parse(new TextDecoder().decode(out) || '{}');
+    } catch {
+      // not JSON
+    }
+    return r.file ?? { path };
+  }
+
+  /**
+   * A presigned URL for one download (GET, the default) or upload (PUT) of
+   * `path`, straight to the host: hand it to curl or a browser for big
+   * files. `ttlS` is 10..300 s.
+   */
+  async link(path: string, opts: { method?: 'GET' | 'PUT'; ttlS?: number } = {}): Promise<CloudFileLink> {
+    const body: Json = { path };
+    if (opts.method !== undefined) body.method = opts.method;
+    if (opts.ttlS !== undefined) {
+      checkInt('ttlS', opts.ttlS, 10, 300);
+      body.ttl_s = opts.ttlS;
+    }
+    return (await this.cloud.request<{ link: CloudFileLink }>('POST', `${this.base}/files/link`, body)).link;
   }
 
   /** Remove a file, or a folder and everything in it with `recursive`. Resolves with the removed path. */

@@ -55,13 +55,16 @@ With no `template`, a sandbox starts from the org's default, `base`:
 
 | method | endpoint |
 | --- | --- |
-| `cloud.sandboxes.create({ template?, region?, sleepAfterS?, ttlS?, deleteAfter?, acceptPrice? })` → `CloudSandbox` | `POST /v1/sandboxes` |
-| `cloud.sandboxes.list({ all?, limit?, cursor? })` → `CloudSandbox[]` | `GET /v1/sandboxes` |
+| `cloud.sandboxes.create({ template?, region?, sleepAfterS?, ttlS?, deleteAfter?, acceptPrice?, size?, cpus?, memMb?, image?, diskGb?, persistent?, docker?, cpu?, name?, env?, snapshot?, egress?, secrets?, labels?, wait? })` → `CloudSandbox` | `POST /v1/sandboxes` (waits for a cold boot unless `wait: false`) |
+| `cloud.sandboxes.list({ all?, limit?, cursor?, name?, labels? })` → `CloudSandbox[]` | `GET /v1/sandboxes` (`labels: { team: 'ml', gpu: true }` → `label=team=ml&label=gpu`) |
 | `cloud.sandboxes.listPage({ all?, limit?, cursor? })` → `{ sandboxes, nextCursor }` | `GET /v1/sandboxes` |
 | `cloud.sandboxes.iterate({ all?, limit? })` → async iterable of `CloudSandbox` | every page, following `nextCursor` |
 | `cloud.sandboxes.get(id)` → `CloudSandbox` | `GET /v1/sandboxes/{id}` |
 | `cloud.templates()` → `CloudTemplate[]` | `GET /v1/templates` |
 | `box.exec(cmd, { image?, env? })` → `{ exitCode, stdout, stderr, wokeMs? }` | `POST …/exec` (a string runs through `sh -c`) |
+| `box.execBackground(cmd, { image?, env? })` → `CloudBackgroundExec` (`status()`, `wait()`) | `POST …/exec {background: true}` → 202; `GET …/exec/{bg_id}` |
+| `box.getExec(bgId)` → `CloudBackgroundExec` | `GET …/exec/{bg_id}` |
+| `box.waitUntilRunning({ timeoutMs? })` | polls `GET` while `creating` |
 | `box.update({ ttlS?, deleteAfter?, sleepAfterS? })` → `{ sandbox, notes }` | `PATCH /v1/sandboxes/{id}`; `{ ttlS: null }` clears the lifetime |
 | `box.sleep()`, `box.wake()`, `box.refresh()`, `box.delete()` | `POST …/sleep`, `POST …/wake`, `GET`, `DELETE` |
 
@@ -93,7 +96,82 @@ await box.rewind(cp);                 // /workspace is back
 const [copy] = await box.fork(1);     // a second sandbox, as this one is now
 ```
 
-The Cloud API has no sandbox labels or metadata.
+### Sized and Docker sandboxes, env, snapshots
+
+```ts
+// 4 vCPU / 8 GiB, Ubuntu with common toolchains, its own Docker engine and env.
+const box = await cloud.sandboxes.create({
+  size: '4x8',
+  image: 'kosa8-template/universal-24.04-20261115.2',
+  docker: true,
+  env: { NODE_ENV: 'production' },
+  name: 'web-1',
+  labels: { team: 'web' },
+  ttlS: 3600,
+});
+// A long command in the background, then its result.
+const job = await box.execBackground('dockerd > /var/log/dockerd.log 2>&1 & sleep 3; docker run --rm hello-world');
+const done = await job.wait();
+console.log(done.exit, done.output);
+
+// A durable snapshot, and a fresh sandbox from it (files, packages and processes as they were).
+const snap = await box.snapshot('web-ready');
+const copy = await cloud.sandboxes.create({ snapshot: snap, ttlS: 600 });
+await cloud.snapshots.list();            // the org's snapshots
+await cloud.snapshots.delete(snap.id);
+```
+
+A sized create (`size`, `cpus`+`memMb`, `image` or `diskGb`) boots cold and answers `creating`; `create` polls until it is running (or throws with `last_error`). `size` is `2x4`, `4x8`, `8x16` or `16x32` (`CLOUD_SIZES`). `docker` makes the sandbox persistent. `cpu: 'dedicated'` gives whole physical cores. `region` takes `us-ash1`, `eu-hel1` or the area alone (`us`, `eu`). A create `{ snapshot }` takes the snapshot's template, size and image, so `template`, `size`, `cpus`, `memMb`, `image`, `diskGb`, `docker`, `persistent`, `cpu` and `region` are refused before any request. `env` values are never logged or returned.
+
+### Previews, terminal, code interpreter
+
+```ts
+await box.execBackground('python3 -m http.server 3000');
+const p = await box.previews.create(3000);          // private: a signed link on kosa8labs.com
+console.log(p.url);
+await box.previews.create(8080, { public: true, wake: true });
+const t = await box.terminal({ cols: 120, rows: 32 }); // wss:// URL for a PTY WebSocket
+const r = await box.runCode('import math; math.pi'); // stateful Python; charts come back as image/png
+```
+
+| method | endpoint |
+| --- | --- |
+| `box.previews.create(port, { public?, expiresInS?, wake?, wakePerHour? })`, `list()`, `link(port, { expiresInS? })`, `rotate(port)`, `delete(port)` | `…/previews` |
+| `box.terminal({ cols?, rows?, command? })` → `{ url, expires_at, protocol }` | `POST …/terminal` |
+| `box.runCode(code, { context?, timeoutS? })` → `{ results, stdout, stderr, error? }` | `POST …/code` |
+| `box.codeContexts.list()`, `create(name?)`, `reset(name)`, `delete(name)` | `…/code/contexts` |
+| `box.files.readRaw(path)`, `box.files.writeRaw(path, data)` (no 8 MiB cap) | `…/files/raw` |
+| `box.files.link(path, { method?: 'GET' \| 'PUT', ttlS? })` → presigned URL | `POST …/files/link` |
+| `box.egress()`, `box.setEgress({ internet?, allow?, deny?, presets? })`, `box.resetEgress()` | `…/egress` |
+| `cloud.egressPresets()`, `cloud.orgEgress()`, `cloud.setOrgEgress(policy \| null, { enforce? })` | `/v1/egress/presets`, `/v1/org/egress` |
+| `box.schedules.create({ cron, cmd, env?, name?, wake? })`, `list()`, `run(id)`, `delete(id)` | `…/schedules` |
+| `box.setLabels(labels)`, `box.metrics()`, `box.logs({ limit? })`, `box.secrets()` | `…/labels`, `…/metrics`, `…/logs`, `…/secrets` |
+| `cloud.capabilities()` | `GET /v1/capabilities` (feature detection) |
+
+### Secrets
+
+```ts
+// The value goes in a request body once and never comes back; sandboxes hold a placeholder.
+await cloud.secrets.set('OPENAI', process.env.OPENAI_API_KEY!, { upstream: 'api.openai.com', pipelines: true });
+const box = await cloud.sandboxes.create({ secrets: ['OPENAI'] });
+await cloud.secrets.list();          // names and settings, never values
+await cloud.secrets.delete('OPENAI'); // { deleted, stillHeldBy }
+```
+
+### Pipelines
+
+```ts
+const run = await cloud.pipelines.run({ repoUrl: 'https://github.com/me/app', ref: 'main', size: '4x8', secrets: ['NPM_TOKEN'] });
+const done = await cloud.pipelines.wait(run.id);  // success | failure | cancelled | error
+const logs = await cloud.pipelines.logs(run.id);  // per job; pass logs[i].next as `after` to follow
+for (const a of await cloud.pipelines.artifacts(run.id)) {
+  const tgz = await cloud.pipelines.downloadArtifact(run.id, a.job, a.idx);
+}
+const hook = await cloud.pipelines.hooks.create({ repoUrl: 'https://github.com/me/app', provider: 'github', cron: '0 3 * * *' });
+console.log(hook.url, hook.secret); // give both to GitHub's webhook settings
+```
+
+`cloud.pipelines` also has `list({ state?, limit? })`, `get(id)` and `cancel(id)`; `cloud.pipelines.hooks` has `list()` and `delete(id)`.
 
 ### Functions
 
