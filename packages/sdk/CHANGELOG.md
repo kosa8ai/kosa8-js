@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+The rest of the kosa8 Cloud API.
+
+- Sized and Docker creates: `cloud.sandboxes.create` takes `size` (`2x4`, `4x8`, `8x16`, `16x32`; `CLOUD_SIZES`), `cpus`+`memMb`, `image` (e.g. `kosa8-template/universal-24.04-20261115.2`), `diskGb`, `persistent`, `docker`, `cpu: 'dedicated'`, `name`, `env`, `egress`, `secrets`, `labels` and `snapshot`. A cold boot (202 `creating`) is waited for unless `wait: false`; `box.waitUntilRunning()`. Conflicting options are refused before any request.
+- `list({ name, labels })`.
+- Background commands: `box.execBackground(cmd)` → `CloudBackgroundExec` with `status()` and `wait()`; `box.getExec(id)`.
+- Durable snapshots: `box.snapshot(name?)`, `cloud.snapshots.create|list|get|delete`.
+- Previews (`box.previews.create|list|link|rotate|delete`), `box.terminal()`, the code interpreter (`box.runCode`, `box.codeContexts`), `box.files.readRaw|writeRaw|link`, egress (`box.egress|setEgress|resetEgress`, `cloud.egressPresets|orgEgress|setOrgEgress`), schedules (`box.schedules`), `box.setLabels|metrics|logs|secrets`, `cloud.capabilities()`.
+- Secrets: `cloud.secrets.set|list|delete` (values go in a body, never come back).
+- Pipelines: `cloud.pipelines.run|list|get|logs|cancel|artifacts|downloadArtifact|wait` and `cloud.pipelines.hooks.create|list|delete`.
+
 ## 0.4.0 — 2026-11-12
 
 kosa8 Cloud parity with the Cloud API (and the Python SDK).
