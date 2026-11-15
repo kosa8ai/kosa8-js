@@ -395,7 +395,7 @@ describe('cloud error mapping', () => {
     expect(e).toBeInstanceOf(Kosa8ApiError);
     expect(e.status).toBe(504);
     expect(e.message).toMatch(/upstream timed out/);
-    expect(e.message).toMatch(/30 s/);
+    expect(e.message).toMatch(/90 s/);
     expect(e.message).toMatch(/nohup/);
   });
 

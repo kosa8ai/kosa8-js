@@ -187,7 +187,7 @@ export class Kosa8RateLimitError extends Kosa8ApiError {
 export class Kosa8OrgFrozenError extends Kosa8ApiError {}
 
 /**
- * A buffered kosa8 Cloud exec ran past the API's limit (about 30 s today).
+ * A buffered kosa8 Cloud exec ran past the API's limit (90 s).
  * Raised for HTTP 504, for code exec_timeout, and for a 502 host_failed on
  * /exec that says it timed out. Run long jobs in the background instead
  * (`nohup cmd > /workspace/out.log 2>&1 &`) and poll for the result.

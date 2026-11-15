@@ -41,7 +41,7 @@ With no `template`, a sandbox starts from the org's default, `base`:
 
 - Alpine Linux. `sh` is busybox: there is **no bash, python or git**. For Python, create with `{ template: 'python' }`, or pick another from `await cloud.templates()`.
 - **Each exec runs in a fresh container; only `/workspace` persists** between calls. Install packages into `/workspace` (for example `pip install --target /workspace/lib ...` on the `python` template), not into the system.
-- A buffered `exec` is cut off after about **30 s** by the Cloud API today, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background and poll:
+- A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background and poll:
 
   ```ts
   await box.exec("nohup sh -c 'sleep 120; echo done' > /workspace/job.log 2>&1 &");
@@ -195,7 +195,7 @@ Every error from the cloud is a `Kosa8Error` with the cloud's stable `code`, its
 | `Kosa8PaymentRequiredError` | 402: `code` is `payment_required`, `spending_cap_reached`, `price_not_accepted`, … `upgradeUrl` is where the person adds a card or credit and `agentMessage` is a sentence an agent should relay word for word (each `null` when absent) |
 | `Kosa8OrgFrozenError` | 423 `org_frozen`: the org is frozen in the Security Center; an owner or admin must unfreeze it |
 | `Kosa8RateLimitError` | 429: rate limited or a quota reached (`quota_exceeded`); `retryAfter` is the Retry-After header in seconds, when sent |
-| `Kosa8ExecTimeoutError` | a buffered exec ran past about 30 s (504, `exec_timeout`, or a 502 `host_failed` on exec that timed out); run the job in the background instead |
+| `Kosa8ExecTimeoutError` | a buffered exec ran past its 90 s limit (504, `exec_timeout`, or a 502 `host_failed` on exec that timed out); run the job in the background instead |
 | `Kosa8UnsupportedError` | 501 `not_available`/`not_supported`: this host has no data plane yet |
 | `Kosa8NotFoundError`, `Kosa8BadRequestError`, `Kosa8AuthError`, `Kosa8ConflictError` | 404, 400, 401, 409 |
 | `Kosa8ConnectionError`, `Kosa8TimeoutError` | the cloud could not be reached, or did not answer in time (default 120 s, `timeoutMs`) |
