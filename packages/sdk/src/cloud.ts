@@ -267,7 +267,15 @@ export interface CloudExecOptions {
   image?: string;
   /** Environment variables for the command (over the sandbox's own `env`). */
   env?: Record<string, string>;
+  /**
+   * Stop the command after this many seconds (the API's `timeout_s`, 1..86400).
+   * A buffered exec is held to 90 s whatever this says.
+   */
+  timeoutS?: number;
+  /** Abort the request. The command itself may keep running in the sandbox. */
+  signal?: AbortSignal;
 }
+
 
 export interface CloudExecResult {
   exitCode: number | null;
@@ -429,8 +437,8 @@ export class Kosa8Cloud {
   }
 
   /** @internal */
-  async request<T = Json>(method: string, path: string, body?: unknown): Promise<T> {
-    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json');
+  async request<T = Json>(method: string, path: string, body?: unknown, opts: { signal?: AbortSignal } = {}): Promise<T> {
+    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json', opts.signal);
     const text = await resp.text();
     let data: unknown = text;
     try {
@@ -459,9 +467,19 @@ export class Kosa8Cloud {
     return buf;
   }
 
-  private async send(method: string, path: string, raw: RawOptions, accept: string): Promise<Response> {
+  private async send(method: string, path: string, raw: RawOptions, accept: string, signal?: AbortSignal): Promise<Response> {
+    signal?.throwIfAborted();
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), this.timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctl.abort();
+    }, this.timeoutMs);
+    // The caller's signal also ends the request, body included.
+    const anyOf = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+    let fetchSignal = ctl.signal;
+    if (signal && anyOf) fetchSignal = anyOf([ctl.signal, signal]);
+    else if (signal) signal.addEventListener('abort', () => ctl.abort(signal.reason), { once: true });
     const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: accept };
     let body: BodyInit | undefined;
     if (raw.bytes !== undefined) {
@@ -472,8 +490,9 @@ export class Kosa8Cloud {
       body = JSON.stringify(raw.json);
     }
     try {
-      return await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body, signal: ctl.signal });
+      return await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body, signal: fetchSignal });
     } catch (e) {
+      if (signal?.aborted && !timedOut) throw signal.reason ?? e;
       if (ctl.signal.aborted) {
         throw new Kosa8TimeoutError(`kosa8 Cloud did not answer within ${this.timeoutMs} ms`, { method, path, cause: e });
       }
@@ -646,6 +665,19 @@ export class CloudSandboxes {
   }
 }
 
+function execBody(cmd: string | string[], opts: CloudExecOptions): Json {
+  const argv = typeof cmd === 'string' ? ['sh', '-c', cmd] : cmd;
+  const body: Json = { cmd: argv };
+  if (opts.image !== undefined) body.image = opts.image;
+  const env = envList(opts.env);
+  if (env) body.env = env;
+  if (opts.timeoutS !== undefined) {
+    checkInt('timeoutS', opts.timeoutS, 1, 86_400);
+    body.timeout_s = opts.timeoutS;
+  }
+  return body;
+}
+
 /** One cloud sandbox. `info` is its state as of the last call. */
 export class CloudSandbox {
   constructor(private readonly cloud: Kosa8Cloud, public info: CloudSandboxInfo) {}
@@ -672,19 +704,17 @@ export class CloudSandbox {
    * Run a command and wait for it. A string runs through `sh -c` (busybox sh
    * on the base template). A sleeping sandbox wakes for it.
    *
-   * Each exec runs in a fresh container; only `/workspace` persists between
-   * calls. The request body is capped at 64 KiB (413 too_large). A buffered
-   * exec runs at most 90 s: past that the Cloud API stops the command and
-   * answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`; run long jobs in the background
-   * (`nohup cmd > /workspace/out.log 2>&1 &`) and poll.
+   * Commands run in the sandbox's own long-lived container (one naming
+   * another `image` runs in a fresh container that shares only `/workspace`).
+   * The request body is capped at 64 KiB (413 too_large). A buffered exec
+   * runs at most 90 s: past that the Cloud API stops the command and answers
+   * 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Run longer
+   * commands with `execBackground`, which `stop()` can end.
    */
   async exec(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudExecResult> {
-    const argv = typeof cmd === 'string' ? ['sh', '-c', cmd] : cmd;
-    const body: Json = { cmd: argv };
-    if (opts.image !== undefined) body.image = opts.image;
-    if (opts.env) body.env = Object.entries(opts.env).map(([k, v]) => `${k}=${v}`);
+    const body = execBody(cmd, opts);
     const r = await this.cloud.request<{ exit: number | null; stdout: string; stderr: string; woke_ms?: number }>(
-      'POST', this.path('/exec'), body,
+      'POST', this.path('/exec'), body, { signal: opts.signal },
     );
     const out: CloudExecResult = { exitCode: r.exit, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     if (typeof r.woke_ms === 'number') out.wokeMs = r.woke_ms;
@@ -838,12 +868,9 @@ export class CloudSandbox {
    * ```
    */
   async execBackground(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudBackgroundExec> {
-    const argv = typeof cmd === 'string' ? ['sh', '-c', cmd] : cmd;
-    const body: Json = { cmd: argv, background: true };
-    if (opts.image !== undefined) body.image = opts.image;
-    const env = envList(opts.env);
-    if (env) body.env = env;
-    const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>('POST', this.path('/exec'), body);
+    const body = execBody(cmd, opts);
+    body.background = true;
+    const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>('POST', this.path('/exec'), body, { signal: opts.signal });
     return new CloudBackgroundExec(this.cloud, this.path(), r.exec);
   }
 

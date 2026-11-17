@@ -40,13 +40,13 @@ await box.delete();
 With no `template`, a sandbox starts from the org's default, `base`:
 
 - Alpine Linux. `sh` is busybox: there is **no bash, python or git**. For Python, create with `{ template: 'python' }`, or pick another from `await cloud.templates()`.
-- **Each exec runs in a fresh container; only `/workspace` persists** between calls. Install packages into `/workspace` (for example `pip install --target /workspace/lib ...` on the `python` template), not into the system.
-- A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background and poll:
+- Files written by one exec are there for the next, but each exec has its own processes: a process a buffered exec leaves behind is not guaranteed to outlive it unless the sandbox is `persistent`. `/workspace` is the data disk.
+- A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background, then wait, poll or stop them:
 
   ```ts
-  await box.exec("nohup sh -c 'sleep 120; echo done' > /workspace/job.log 2>&1 &");
-  // later
-  console.log((await box.exec('cat /workspace/job.log')).stdout);
+  const job = await box.execBackground('sleep 120; echo done', { timeoutS: 600 });
+  const done = await job.wait(); // or job.status(), or job.stop()
+  console.log(done.exit, done.output);
   ```
 
 - A request body is at most **64 KiB** (`413 too_large`), so send big inputs as files. A file is at most **8 MiB** through the API.
@@ -61,8 +61,8 @@ With no `template`, a sandbox starts from the org's default, `base`:
 | `cloud.sandboxes.iterate({ all?, limit? })` → async iterable of `CloudSandbox` | every page, following `nextCursor` |
 | `cloud.sandboxes.get(id)` → `CloudSandbox` | `GET /v1/sandboxes/{id}` |
 | `cloud.templates()` → `CloudTemplate[]` | `GET /v1/templates` |
-| `box.exec(cmd, { image?, env? })` → `{ exitCode, stdout, stderr, wokeMs? }` | `POST …/exec` (a string runs through `sh -c`) |
-| `box.execBackground(cmd, { image?, env? })` → `CloudBackgroundExec` (`status()`, `wait()`) | `POST …/exec {background: true}` → 202; `GET …/exec/{bg_id}` |
+| `box.exec(cmd, { image?, env?, timeoutS?, signal? })` → `{ exitCode, stdout, stderr, wokeMs? }` | `POST …/exec` (a string runs through `sh -c`) |
+| `box.execBackground(cmd, { image?, env?, timeoutS?, signal? })` → `CloudBackgroundExec` (`status()`, `wait()`, `stop()`) | `POST …/exec {background: true}` → 202; `GET …/exec/{bg_id}`; `POST …/exec/{bg_id}/stop` |
 | `box.getExec(bgId)` → `CloudBackgroundExec` | `GET …/exec/{bg_id}` |
 | `box.waitUntilRunning({ timeoutMs? })` | polls `GET` while `creating` |
 | `box.update({ ttlS?, deleteAfter?, sleepAfterS? })` → `{ sandbox, notes }` | `PATCH /v1/sandboxes/{id}`; `{ ttlS: null }` clears the lifetime |
