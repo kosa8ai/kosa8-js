@@ -1,7 +1,7 @@
 {
   "name": "@kosa8/ai-sdk-sandbox",
-  "version": "0.1.2",
-  "description": "kosa8 sandbox for the Vercel AI SDK 7: run an agent's commands and files in a local microVM, with egress allow-lists.",
+  "version": "0.2.0",
+  "description": "kosa8 sandbox for the Vercel AI SDK 7: run an agent's commands and files in a microVM on kosa8 Cloud or on your own machine, with egress allow-lists.",
   "license": "MIT",
   "author": "kosa8",
   "homepage": "https://kosa8.com",
@@ -19,6 +19,8 @@
     "vercel-ai-sdk",
     "sandbox",
     "microvm",
+    "kosa8-cloud",
+    "cloud-sandbox",
     "harness",
     "code-execution",
     "ai-agents",
@@ -56,7 +58,7 @@
   "dependencies": {
     "@ai-sdk/harness": "^1.0.153",
     "@ai-sdk/provider-utils": "^5.0.61",
-    "@kosa8/sdk": "^0.1.0 || ^0.2.0 || ^0.3.0 || ^0.4.0"
+    "@kosa8/sdk": "^0.4.1"
   },
   "devDependencies": {
     "ai": "7.0.142",
