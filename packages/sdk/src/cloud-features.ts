@@ -49,6 +49,10 @@ export interface CloudBackgroundExecInfo {
   output?: string | null;
   output_bytes?: number | null;
   output_truncated?: boolean;
+  /** It was ended by `stop()`. */
+  stopped?: boolean;
+  /** It was ended because its `timeoutS` ran out. */
+  timed_out?: boolean;
 }
 
 export interface CloudWaitOptions {
@@ -80,6 +84,18 @@ export class CloudBackgroundExec {
     );
     this.info = r.exec;
     return r.exec;
+  }
+
+  /**
+   * Stop it and what it started (SIGTERM, then SIGKILL after 5 s). Resolves
+   * with `stopping`, or `exited` when it had already ended; `status()` then
+   * reports its exit code (143 or 137) and `stopped: true`.
+   */
+  async stop(): Promise<{ id: string; state: 'stopping' | 'exited' | (string & {}) }> {
+    const r = await this.cloud.request<{ exec: { id: string; state: string } }>(
+      'POST', `${this.sandboxPath}/exec/${enc(this.info.id)}/stop`, {},
+    );
+    return { id: r.exec?.id ?? this.info.id, state: r.exec?.state ?? 'stopping' };
   }
 
   /** Poll until it exits; resolves with its final status (exit code and output). */

@@ -1,14 +1,12 @@
 # Changelog
 
-The rest of the kosa8 Cloud API.
+## 0.4.1 — 2026-11-17
 
-- Sized and Docker creates: `cloud.sandboxes.create` takes `size` (`2x4`, `4x8`, `8x16`, `16x32`; `CLOUD_SIZES`), `cpus`+`memMb`, `image` (e.g. `kosa8-template/universal-24.04-20261115.2`), `diskGb`, `persistent`, `docker`, `cpu: 'dedicated'`, `name`, `env`, `egress`, `secrets`, `labels` and `snapshot`. A cold boot (202 `creating`) is waited for unless `wait: false`; `box.waitUntilRunning()`. Conflicting options are refused before any request.
-- `list({ name, labels })`.
-- Background commands: `box.execBackground(cmd)` → `CloudBackgroundExec` with `status()` and `wait()`; `box.getExec(id)`.
-- Durable snapshots: `box.snapshot(name?)`, `cloud.snapshots.create|list|get|delete`.
-- Previews (`box.previews.create|list|link|rotate|delete`), `box.terminal()`, the code interpreter (`box.runCode`, `box.codeContexts`), `box.files.readRaw|writeRaw|link`, egress (`box.egress|setEgress|resetEgress`, `cloud.egressPresets|orgEgress|setOrgEgress`), schedules (`box.schedules`), `box.setLabels|metrics|logs|secrets`, `cloud.capabilities()`.
-- Secrets: `cloud.secrets.set|list|delete` (values go in a body, never come back).
-- Pipelines: `cloud.pipelines.run|list|get|logs|cancel|artifacts|downloadArtifact|wait` and `cloud.pipelines.hooks.create|list|delete`.
+- `CloudExecOptions` takes `timeoutS` (the API's `timeout_s`, 1 to 86400, checked before any request) and `signal` (an `AbortSignal` that ends the request) for `box.exec` and `box.execBackground`.
+- `CloudBackgroundExec.stop()` (`POST …/exec/{id}/stop`): SIGTERM, then SIGKILL after 5 s. `CloudBackgroundExecInfo` has `stopped` and `timed_out`.
+- `box.state`: the sandbox's state as of the last call (it was `undefined` after create, list and get).
+- The exec limit is 90 s, not 30 s, in the docs, `Kosa8ExecTimeoutError` and its hint. The docs no longer say each exec runs in a fresh container: files last between execs; processes a buffered exec leaves behind may not.
+- Used by `@kosa8/ai-sdk-sandbox` 0.2.0's kosa8 Cloud session.
 
 ## 0.4.0 — 2026-11-15
 
@@ -25,6 +23,16 @@ kosa8 Cloud parity with the Cloud API (and the Python SDK).
 - Errors: `Kosa8PaymentRequiredError` has `upgradeUrl` and `agentMessage` (`null` when absent). New `Kosa8OrgFrozenError` (423 `org_frozen`) and `Kosa8ExecTimeoutError` (504, `exec_timeout`, or a 502 `host_failed` on exec that timed out; a buffered exec is cut off after about 30 s). `Kosa8RateLimitError` has `retryAfter` (seconds) when the answer had a Retry-After header. Every cloud error keeps the whole answer as `body`.
 - New types: `CloudUpdateOptions`, `CloudListOptions`, `CloudSandboxPage`, `CloudFileInfo`, `CloudCheckpoint`, `CloudRewindResult`, `CloudPort`, `CloudTemplate`; constants `MIN_TTL_S`, `MAX_TTL_S`, `MAX_SLEEP_AFTER_S`, `MAX_FORK_N`.
 - README leads with kosa8 Cloud, including what the base template can and cannot do.
+
+The rest of the kosa8 Cloud API, also in 0.4.0:
+
+- Sized and Docker creates: `cloud.sandboxes.create` takes `size` (`2x4`, `4x8`, `8x16`, `16x32`; `CLOUD_SIZES`), `cpus`+`memMb`, `image` (e.g. `kosa8-template/universal-24.04-20261115.2`), `diskGb`, `persistent`, `docker`, `cpu: 'dedicated'`, `name`, `env`, `egress`, `secrets`, `labels` and `snapshot`. A cold boot (202 `creating`) is waited for unless `wait: false`; `box.waitUntilRunning()`. Conflicting options are refused before any request.
+- `list({ name, labels })`.
+- Background commands: `box.execBackground(cmd)` → `CloudBackgroundExec` with `status()` and `wait()`; `box.getExec(id)`.
+- Durable snapshots: `box.snapshot(name?)`, `cloud.snapshots.create|list|get|delete`.
+- Previews (`box.previews.create|list|link|rotate|delete`), `box.terminal()`, the code interpreter (`box.runCode`, `box.codeContexts`), `box.files.readRaw|writeRaw|link`, egress (`box.egress|setEgress|resetEgress`, `cloud.egressPresets|orgEgress|setOrgEgress`), schedules (`box.schedules`), `box.setLabels|metrics|logs|secrets`, `cloud.capabilities()`.
+- Secrets: `cloud.secrets.set|list|delete` (values go in a body, never come back).
+- Pipelines: `cloud.pipelines.run|list|get|logs|cancel|artifacts|downloadArtifact|wait` and `cloud.pipelines.hooks.create|list|delete`.
 
 ## 0.3.1 — 2026-11-03
 
