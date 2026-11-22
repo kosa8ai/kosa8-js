@@ -200,6 +200,20 @@ export class CloudBrowsers {
     return new CloudBrowser(this.cloud, r.browser);
   }
 
+  /**
+   * How to connect a CDP client to an open browser: `cdpUrl` (the
+   * `wss://…/v1/browsers/{id}/cdp?token=…` WebSocket, for Playwright's
+   * `chromium.connectOverCDP(cdpUrl)` or Puppeteer's
+   * `connect({ browserWSEndpoint: cdpUrl })`) and when its token expires.
+   * Each call reads the browser again, so the URL is fresh. Throws when the
+   * browser is closed.
+   */
+  async cdp(id: string): Promise<{ id: string; cdpUrl: string; expiresAt: number | string | null; endpoint: string }> {
+    const b = (await this.cloud.request<{ browser: CloudBrowserInfo }>('GET', `/v1/browsers/${enc(id)}`)).browser;
+    if (!b?.cdp_url) throw new Kosa8Error(`browser ${id} is ${b?.state ?? 'not open'}: it has no CDP URL; open a new one with browsers.create()`);
+    return { id: b.id, cdpUrl: b.cdp_url, expiresAt: b.cdp_url_expires_at ?? null, endpoint: `/v1/browsers/${enc(b.id)}/cdp` };
+  }
+
   /** Close a browser by id. */
   delete(id: string): Promise<{ ok: boolean; id: string }> {
     return this.cloud.request('DELETE', `/v1/browsers/${enc(id)}`);
@@ -267,6 +281,25 @@ export interface CloudAiUsage {
  */
 export class CloudAi {
   constructor(private readonly cloud: CloudRequester) {}
+
+  /**
+   * The gateway's base URL for a provider, `https://api.kosa8.com/v1/ai/gw/{provider}/`:
+   * point an OpenAI or Anthropic client at it with your kosa8 API key as its
+   * key, and calls go through the org's stored provider key (`setKey`).
+   *
+   * ```ts
+   * const openai = new OpenAI({ baseURL: cloud.ai.gatewayUrl('openai'), apiKey: process.env.KOSA8_API_KEY });
+   * ```
+   *
+   * The OpenAI SDK appends `chat/completions` and so on; Anthropic's appends `v1/messages`.
+   * `path` gives one call's full URL instead (`gatewayUrl('openai', 'chat/completions')`).
+   */
+  gatewayUrl(provider: string, path = ''): string {
+    if (!/^[a-z0-9-]{1,40}$/.test(provider ?? '')) throw new Kosa8Error(`provider must be a name such as openai or anthropic, got ${provider}`);
+    const base = ((this.cloud as { baseUrl?: string }).baseUrl ?? 'https://api.kosa8.com').replace(/\/$/, '');
+    const rest = String(path).replace(/^\/+/, '');
+    return `${base}/v1/ai/gw/${provider}/${rest}`;
+  }
 
   settings(): Promise<CloudAiSettings> {
     return this.cloud.request('GET', '/v1/ai/settings');

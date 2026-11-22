@@ -21,6 +21,11 @@ export interface CloudRequester {
 
 const enc = encodeURIComponent;
 
+/** The (encoded) sandbox id in `/v1/sandboxes/{id}`, so calls can spell their path out in full. */
+function sandboxIdOf(sandboxPath: string): string {
+  return sandboxPath.startsWith('/v1/sandboxes/') ? sandboxPath.slice('/v1/sandboxes/'.length) : sandboxPath;
+}
+
 function sleepMs(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -81,7 +86,7 @@ export class CloudBackgroundExec {
   /** Running or exited, its exit code and its output so far. */
   async status(): Promise<CloudBackgroundExecInfo> {
     const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>(
-      'GET', `${this.sandboxPath}/exec/${enc(this.info.id)}`,
+      'GET', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/exec/${enc(this.info.id)}`,
     );
     this.info = r.exec;
     return r.exec;
@@ -94,7 +99,7 @@ export class CloudBackgroundExec {
    */
   async stop(): Promise<{ id: string; state: 'stopping' | 'exited' | (string & {}) }> {
     const r = await this.cloud.request<{ exec: { id: string; state: string } }>(
-      'POST', `${this.sandboxPath}/exec/${enc(this.info.id)}/stop`, {},
+      'POST', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/exec/${enc(this.info.id)}/stop`, {},
     );
     return { id: r.exec?.id ?? this.info.id, state: r.exec?.state ?? 'stopping' };
   }
@@ -237,7 +242,7 @@ export class CloudPreviews {
   /** Close the preview. */
   async delete(port: number): Promise<void> {
     checkPort(port);
-    await this.cloud.request('DELETE', `${this.sandboxPath}/previews/${port}`);
+    await this.cloud.request('DELETE', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/previews/${port}`);
   }
   /** The preview's custom domains: serve it at your own hostname. */
   domains(port: number): CloudPreviewDomains {
@@ -390,7 +395,7 @@ export class CloudSchedules {
   }
 
   async delete(id: string): Promise<void> {
-    await this.cloud.request('DELETE', `${this.sandboxPath}/schedules/${enc(id)}`);
+    await this.cloud.request('DELETE', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/schedules/${enc(id)}`);
   }
 
   /** Run it now; resolves with the run's result. */
@@ -454,7 +459,7 @@ export class CloudCodeContexts {
   }
 
   async delete(name: string): Promise<void> {
-    await this.cloud.request('DELETE', `${this.sandboxPath}/code/contexts/${enc(name)}`);
+    await this.cloud.request('DELETE', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/code/contexts/${enc(name)}`);
   }
 }
 

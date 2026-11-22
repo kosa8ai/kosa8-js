@@ -21,6 +21,7 @@ const cloud = new Kosa8Cloud(); // reads KOSA8_API_KEY; talks to https://api.kos
 
 // Deleted automatically in an hour, even if this script dies.
 const box = await cloud.sandboxes.create({ ttlS: 3600 });
+// Or a small size for a mostly idle agent: cloud.sandboxes.create({ size: '0.25x0.5' }) (or cpus: 0.25, memMb: 512).
 
 const r = await box.exec('echo hello > /workspace/hi.txt && cat /workspace/hi.txt');
 console.log(r.exitCode, r.stdout); // 0 "hello\n"
@@ -40,7 +41,7 @@ await box.delete();
 With no `template`, a sandbox starts from the org's default, `base`:
 
 - Alpine Linux. `sh` is busybox: there is **no bash, python or git**. For Python, create with `{ template: 'python' }`, or pick another from `await cloud.templates()`.
-- Only `/workspace` is sure to persist between commands. A command may run in a fresh container, so `cd`, `export`, processes it leaves running and anything written or installed outside `/workspace` may be gone by the next one. Create with `{ persistent: true }` (one long-lived container) to keep the whole filesystem and background processes; the code interpreter (`runCode`) needs it, and it counts against your plan's persistent-sandbox limit.
+- Each exec is a fresh process, and files in `/workspace` persist for the sandbox's life. Anything else (installed packages, `cd`, `export`, files outside `/workspace`, processes a command leaves running) needs `{ persistent: true }`: without it a command may run in a fresh container that shares only `/workspace`. A persistent sandbox runs every exec in one long-lived container; the code interpreter (`runCode`) needs it, and it counts against your plan's persistent-sandbox limit.
 - `exec(cmd, { timeoutS: 30 })` stops a command in the sandbox when it runs that long.
 - A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background, then wait, poll or stop them:
 
@@ -140,7 +141,7 @@ await rl.withRun(cloud, { name: 'grpo-7', project: 'swe' }, async (run) => {
 
 **Idempotency.** Creates, batches, forks and grades send an `Idempotency-Key` (a fresh UUID per call, or yours as `idempotencyKey`), reused across that call's retries: a retried create never makes two.
 
-**Retries.** `new Kosa8Cloud({ retry })` takes a `RetryPolicy` (default `new RetryPolicy()`: 3 tries, full-jitter backoff from 500 ms up to 8 s, at least the Retry-After) or `false`. Reads, PUTs, deletes, heartbeats, drains and the idempotent creates are retried on infra failures; anything on a 429 that may pass. `callWithRetry(fn, policy)` is the same loop for your own code.
+**Retries.** `new Kosa8Cloud({ retry })` takes a `RetryPolicy` (default `new RetryPolicy()`: 3 tries, full-jitter backoff from 500 ms up to 8 s, at least the server's `Retry-After` header or `retry_after` seconds, up to 60 s) or `false`. Every request retries what the answer marks `retryable: true` (infra failures, rate limits). Reads, PUTs, deletes, heartbeats, drains and the creates, forks and grades (which send an Idempotency-Key) are retried on any of those. Any other POST is resent only on answers that refused it before anything ran: 429, 503 `database_busy` (kosa8 Cloud's database was overloaded) and 409 `template_building` (a benchmark's environment is still being built). `callWithRetry(fn, policy)` is the same loop for your own code.
 
 **Failure classes.** Every error has `failureClass` (`timeout`, `infra`, `quota`, `client`, or `error` for one that is not the API's) and `retryable`, kosa8 Cloud's own when the answer had them; exec results have `failureClass` `ok`, `exit_nonzero` or `infra`. `classifyFailure(e)` classes anything thrown.
 
@@ -241,7 +242,8 @@ await browser.close();
 await cloud.listBrowsers({ state: 'all' }); await cloud.getBrowser('brw_...'); await cloud.browsers.delete('brw_...');
 ```
 
-Puppeteer: `puppeteer.connect({ browserWSEndpoint: b.cdpUrl })`.
+Puppeteer: `puppeteer.connect({ browserWSEndpoint: b.cdpUrl })`. `await cloud.browsers.cdp('brw_...')` reads a
+browser again and gives a fresh `cdpUrl` (the `wss://…/v1/browsers/{id}/cdp?token=…` WebSocket) and its expiry.
 
 ### AI gateway
 
@@ -254,6 +256,14 @@ await cloud.updateAiSettings({ enabled: true, cacheTtlS: 3600, ratePerMin: 120 }
 const box = await cloud.sandboxes.create({ aiGateway: true }); // OPENAI_BASE_URL, ANTHROPIC_BASE_URL, KOSA8_AI_GATEWAY_URL, KOSA8_AI_TOKEN set
 console.log((await cloud.aiUsage('2026-11')).total);          // calls, cost_usd, tokens_in, tokens_out, cached, errors
 await cloud.deleteAiKey('openai');
+```
+
+Outside a sandbox, point a provider's own client at the gateway with your kosa8 API key as its key:
+
+```ts
+import OpenAI from 'openai';
+const openai = new OpenAI({ baseURL: cloud.ai.gatewayUrl('openai'), apiKey: process.env.KOSA8_API_KEY });
+// cloud.ai.gatewayUrl('anthropic') for Anthropic's SDK (it appends v1/messages)
 ```
 
 ### Pipelines
@@ -282,7 +292,30 @@ const out = await cloud.functions.invoke('hello', { name: 'kosa8' });
 console.log(out.ok, out.result); // true { hello: 'kosa8' }
 ```
 
-`cloud.functions` also has `list`, `get`, `delete` and `map`. `cloud.me()` and `cloud.usage()` answer the org and this month's bill.
+`cloud.functions` also has `list`, `get`, `delete`, `map` and `invocations(name, { limit? })` (recent calls, newest first).
+
+### Org: usage, limits, keys, webhooks, audit
+
+| call | API |
+| --- | --- |
+| `cloud.me()`, `cloud.usage()`, `cloud.usageInsights()` | the org; this month's bill; spend day by day, top sandboxes, projected month end |
+| `cloud.pricing()`, `cloud.limits()`, `cloud.requestLimit(maxRunning, reason?)` | the rate card; the running-sandbox limit; ask for more |
+| `cloud.lineage()`, `cloud.checkpoints()`, `cloud.images()` | the fork tree; every sandbox's checkpoints; the images behind the templates |
+| `cloud.apiKeys.list()` / `create({ name, scopes?, expiresInS? })` / `revoke(id)` / `rotate(id, { graceS? })` | `/v1/api-keys`; a new key's `secret` is shown once |
+| `cloud.webhooks.list()` / `create(url, { events?, description? })` / `delete(id)` / `deliveries(id)` / `test(id)` | `/v1/webhooks`; the `whsec_` secret is shown once |
+| `cloud.audit.list({ sandboxId?, actor?, action?, since?, until?, beforeSeq?, limit? })` / `verify()` / `export()` | the hash-chained audit log |
+
+### Benchmarks and RL alerts
+
+```ts
+const [swe] = await cloud.benchmarks.list();                       // name, instances, environments ready/building
+const { instances } = await cloud.benchmarks.instances(swe.name, { state: 'ready', limit: 10 });
+await cloud.benchmarks.prepare(swe.name, 20, { seed: 1 });         // build environments ahead (ids, 'all' or a count)
+const box = await cloud.sandboxes.create({ template: instances[0].template }); // waits out 409 template_building
+
+await cloud.rl.compare(['run_a', 'run_b']);                         // 2 to 4 runs side by side
+await cloud.rl.alerts.create({ kind: 'infra_rate', threshold: 0.2, window: 50, runId: 'run_a' }); // fires the rl.alert webhook event
+```
 
 ### Cloud errors
 
@@ -294,7 +327,7 @@ Every error from the cloud is a `Kosa8Error` with the cloud's stable `code`, its
 | `Kosa8OrgFrozenError` | 423 `org_frozen`: the org is frozen in the Security Center; an owner or admin must unfreeze it |
 | `Kosa8RateLimitError` | 429: rate limited or a quota reached (`quota_exceeded`); `retryAfter` is the Retry-After header in seconds, when sent |
 | `Kosa8ExecTimeoutError` | a buffered exec ran past its 90 s limit (504, `exec_timeout`, or a 502 `host_failed` on exec that timed out); run the job in the background instead |
-| `Kosa8UnsupportedError` | 501 `not_available`/`not_supported`: this host has no data plane yet |
+| `Kosa8UnsupportedError` | 501 `not_available`/`not_supported`: the host cannot do this. A sandbox on kosa8's overflow capacity (Cloudflare) has no fork, checkpoint or sleep and says so in `message`; create it at a size a kosa8 host runs (such as `2x4`) for those |
 | `Kosa8NotFoundError`, `Kosa8BadRequestError`, `Kosa8AuthError`, `Kosa8ConflictError` | 404, 400, 401, 409 |
 | `Kosa8ConnectionError`, `Kosa8TimeoutError` | the cloud could not be reached, or did not answer in time (default 120 s, `timeoutMs`) |
 
