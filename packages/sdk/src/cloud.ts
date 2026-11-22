@@ -954,7 +954,9 @@ function cloudError(resp: Response, body: unknown, ctx: { method: string; path: 
   const requestId = resp.headers?.get?.('X-Request-Id') || resp.headers?.get?.('cf-ray') || undefined;
   if (execTimeout) {
     const base = message ?? `request failed with HTTP ${status}`;
-    return new Kosa8ExecTimeoutError(`${base} (${EXEC_LIMIT_HINT})${requestId ? ` [request ${requestId}]` : ''}`, {
+    // Its own timeoutS (exec(cmd, { timeoutS })) needs no hint about the 90 s limit.
+    const hint = /timeout_s/.test(message ?? '') ? '' : ` (${EXEC_LIMIT_HINT})`;
+    return new Kosa8ExecTimeoutError(`${base}${hint}${requestId ? ` [request ${requestId}]` : ''}`, {
       status, daemonMessage: message, body, code, ...ctx, ...(requestId ? { requestId } : {}),
     });
   }
