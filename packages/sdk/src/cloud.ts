@@ -224,7 +224,7 @@ export interface CloudCreateOptions {
   egress?: CloudEgressPolicy;
   /** Names of org secrets it holds (as placeholders). */
   secrets?: string[];
-  /** Labels to set once it is created (a second call, PUT …/labels). */
+  /** Labels (at most 16, kosa8.run included), sent with the create and stored before it answers. */
   labels?: Record<string, string>;
   /**
    * A lease (60..86400 s): it is deleted this long from now unless a
@@ -1079,19 +1079,13 @@ export class CloudSandboxes {
     const labels = o.runId !== undefined ? { ...(o.labels ?? {}), [RUN_LABEL]: o.runId } : o.labels;
     checkLabels(labels);
     const body = createBody(o);
+    if (labels !== undefined) body.labels = labels;
     const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body, {
       idempotencyKey: opts.idempotencyKey ?? newIdempotencyKey(),
     });
     const box = new CloudSandbox(this.cloud, r.sandbox);
-    try {
-      if (opts.wait !== false && !SETTLED.has(box.info.state)) {
-        await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
-      }
-      if (labels !== undefined) await box.setLabels(labels);
-    } catch (e) {
-      // It was made but cannot be handed back: do not leave it running.
-      await quietDelete(box);
-      throw e;
+    if (opts.wait !== false && !SETTLED.has(box.info.state)) {
+      await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
     }
     return box;
   }

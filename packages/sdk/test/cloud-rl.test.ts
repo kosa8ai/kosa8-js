@@ -315,12 +315,13 @@ describe('heartbeat, drain and grade', () => {
 });
 
 describe('create: lease, run, record, small sizes', () => {
-  it('sends lease_s and record; runId labels it kosa8.run', async () => {
-    const { cloud, seen } = mockCloud((s) => (s.url.pathname.endsWith('/labels') ? [200, { labels: (s.body as { labels: unknown }).labels }] : [201, { sandbox: info() }]));
+  it('sends lease_s, record and labels (kosa8.run for runId) in the one create', async () => {
+    const { cloud, seen } = mockCloud((s) => [201, { sandbox: info({ labels: (s.body as { labels: Record<string, string> }).labels }) }]);
     const box = await cloud.sandboxes.create({ image: 'ghcr.io/azmxai/kosa8-desktop', persistent: true, record: true, leaseS: 600, runId: 'run_1', labels: { a: 'b' } });
-    expect(seen[0]!.body).toEqual({ image: 'ghcr.io/azmxai/kosa8-desktop', persistent: true, record: true, lease_s: 600 });
-    expect(route(seen[1]!)).toBe('PUT /v1/sandboxes/sbx_1/labels');
-    expect(seen[1]!.body).toEqual({ labels: { a: 'b', [RUN_LABEL]: 'run_1' } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toEqual({
+      image: 'ghcr.io/azmxai/kosa8-desktop', persistent: true, record: true, lease_s: 600, labels: { a: 'b', [RUN_LABEL]: 'run_1' },
+    });
     expect(box.info.labels).toEqual({ a: 'b', 'kosa8.run': 'run_1' });
   });
 
@@ -331,14 +332,11 @@ describe('create: lease, run, record, small sizes', () => {
     expect(seen).toHaveLength(0);
   });
 
-  it('deletes a sandbox it made but could not hand back', async () => {
-    const { cloud, seen } = mockCloud((s) => {
-      if (s.url.pathname.endsWith('/labels')) return [400, { error: 'invalid_labels', message: 'bad label' }];
-      if (s.method === 'DELETE') return [200, {}];
-      return [201, { sandbox: info() }];
-    });
-    await expect(cloud.sandboxes.create({ labels: { 'bad key': 'x' } })).rejects.toThrow(/bad label/);
-    expect(route(seen[2]!)).toBe('DELETE /v1/sandboxes/sbx_1');
+  it('checks labels before any request', async () => {
+    const { cloud, seen } = mockCloud(() => [201, { sandbox: info() }]);
+    const many = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`k${i}`, 'v']));
+    await expect(cloud.sandboxes.create({ labels: many, runId: 'run_1' })).rejects.toThrow(/16 labels/);
+    expect(seen).toHaveLength(0);
   });
 
   it('takes the small sizes', async () => {

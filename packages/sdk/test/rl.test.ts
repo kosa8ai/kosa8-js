@@ -66,9 +66,8 @@ describe('rl.Run', () => {
     expect(f.seen[0]!.body).toEqual({ name: 'grpo-1', project: 'p', config: { lr: 1e-5 } });
     await f.cloud.sandboxes.create({ template: 'python' });
     const create = f.seen.find((s) => s.url.pathname === '/v1/sandboxes')!;
-    expect(create.body).toEqual({ template: 'python', lease_s: 300 });
-    const labels = f.seen.find((s) => s.url.pathname.endsWith('/labels'))!;
-    expect(labels.body).toEqual({ labels: { 'kosa8.run': 'run_1' } });
+    expect(create.body).toEqual({ template: 'python', lease_s: 300, labels: { 'kosa8.run': 'run_1' } });
+    expect(f.seen.some((s) => s.url.pathname.endsWith('/labels'))).toBe(false);
     await run.finish();
     expect(f.drains).toEqual([{ run_id: 'run_1' }]);
     expect(f.patches).toEqual([{ status: 'finished' }]);
@@ -203,9 +202,9 @@ describe('rl.Run.map', () => {
     const f = fakeRl();
     const run = await rl.RlRun.start(f.cloud, { name: 'r', leaseS: 120, ...quiet });
     await run.map({ image: 'ghcr.io/x/task:1' }, [1], async () => 1);
-    expect(f.seen.find((s) => s.url.pathname === '/v1/sandboxes')!.body).toEqual({ image: 'ghcr.io/x/task:1', lease_s: 120 });
+    expect(f.seen.find((s) => s.url.pathname === '/v1/sandboxes')!.body).toEqual({ image: 'ghcr.io/x/task:1', lease_s: 120, labels: { 'kosa8.run': 'run_1' } });
     await run.map('snap_abcdefgh', [1], async () => 1, { step: 7 });
-    expect(f.seen.filter((s) => s.url.pathname === '/v1/sandboxes')[1]!.body).toEqual({ snapshot: 'snap_abcdefgh', lease_s: 120 });
+    expect(f.seen.filter((s) => s.url.pathname === '/v1/sandboxes')[1]!.body).toEqual({ snapshot: 'snap_abcdefgh', lease_s: 120, labels: { 'kosa8.run': 'run_1' } });
     const made: string[] = [];
     const r = await run.map(async (t: string) => {
       made.push(t);
