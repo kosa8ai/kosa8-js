@@ -332,6 +332,16 @@ describe('create: lease, run, record, small sizes', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('deletes a sandbox whose boot wait fails, and rethrows', async () => {
+    const { cloud, seen } = mockCloud((s) => {
+      if (s.method === 'POST') return [202, { sandbox: info({ state: 'creating' }) }];
+      if (s.method === 'DELETE') return [200, {}];
+      return [200, { sandbox: info({ state: 'error', last_error: 'image pull failed' }) }];
+    });
+    await expect(cloud.sandboxes.create({ image: 'x' })).rejects.toThrow(/image pull failed/);
+    expect(route(seen.at(-1)!)).toBe('DELETE /v1/sandboxes/sbx_1');
+  });
+
   it('checks labels before any request', async () => {
     const { cloud, seen } = mockCloud(() => [201, { sandbox: info() }]);
     const many = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`k${i}`, 'v']));

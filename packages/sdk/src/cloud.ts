@@ -1085,7 +1085,13 @@ export class CloudSandboxes {
     });
     const box = new CloudSandbox(this.cloud, r.sandbox);
     if (opts.wait !== false && !SETTLED.has(box.info.state)) {
-      await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
+      try {
+        await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
+      } catch (e) {
+        // It was made but did not come up: do not leave it running.
+        await quietDelete(box);
+        throw e;
+      }
     }
     return box;
   }
