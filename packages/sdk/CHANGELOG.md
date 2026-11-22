@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.3 — unreleased
+## 0.5.3
 
 - Actionable kosa8 Cloud errors. An API error's message is the server's sentence followed by `[HTTP <status> <code>; retry in <n> s; request <id>]` (and `; upgrade: <url>` on a 402 whose sentence lacks it); the bare sentence stays in `daemonMessage`. A 401 adds "check KOSA8_API_KEY; make a new key at https://app.kosa8.com/app#keys".
 - `Kosa8Error.requestId`: the answer's `X-Request-Id`, else Cloudflare's `cf-ray`, to quote to kosa8 support.
