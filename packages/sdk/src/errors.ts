@@ -63,6 +63,68 @@ export interface Kosa8ErrorOptions {
   retryAfter?: number;
 }
 
+/**
+ * Whose fault a failure was, as kosa8 Cloud says on every answer under
+ * /v1/sandboxes: `ok`, `exit_nonzero` (the command ran and failed),
+ * `timeout`, `infra` (a host failed, was not ready or had no room: mask it
+ * in a training loop rather than scoring it 0), `quota` (plan, running,
+ * payment or spending-cap limits) and `client` (the request was wrong).
+ * `error` is the SDK's own: an exception that is not a kosa8 error (a bug
+ * in your code).
+ */
+export const FAILURE_CLASSES = ['ok', 'exit_nonzero', 'timeout', 'infra', 'quota', 'client', 'error'] as const;
+export type FailureClass = (typeof FAILURE_CLASSES)[number];
+
+const INFRA_CODES = new Set([
+  'host_failed', 'not_ready', 'no_capacity', 'host_unreachable', 'host_unavailable', 'host_busy', 'host_restarting',
+  'wake_failed', 'try_again', 'internal', 'kernel_failed', 'egress_failed', 'dns_unreachable', 'host_lost', 'host_removed',
+  'insufficient_storage', 'starting',
+]);
+const RATE_CODES = new Set(['rate_limited', 'slow_down', 'too_soon']);
+const QUOTA_CODES = new Set([
+  'quota_exceeded', 'running_limit', 'plan_required', 'plan_limit', 'plan_feature', 'payment_required', 'payment_declined',
+  'spending_cap_reached', 'snapshot_limit', 'org_frozen', 'org_suspended', 'too_many_runs',
+]);
+
+/**
+ * `{ failureClass, retryable }` for an HTTP status and a kosa8 Cloud error
+ * code, the server's own rules (workers/cloud-api failures.js).
+ */
+export function failureOf(status: number, code?: string | null): { failureClass: FailureClass; retryable: boolean } {
+  const c = typeof code === 'string' ? code : '';
+  if (status < 400) return { failureClass: 'ok', retryable: false };
+  if (c === 'exec_timeout') return { failureClass: 'timeout', retryable: false };
+  if (/timeout/.test(c)) return { failureClass: 'timeout', retryable: true };
+  if (RATE_CODES.has(c)) return { failureClass: 'quota', retryable: true };
+  if (QUOTA_CODES.has(c) || status === 402 || status === 423) return { failureClass: 'quota', retryable: false };
+  if (status === 429) return { failureClass: 'quota', retryable: c !== 'quota_exceeded' };
+  if (c === 'not_available' || c === 'not_supported' || status === 501) return { failureClass: 'infra', retryable: false };
+  if (INFRA_CODES.has(c) || status >= 500) return { failureClass: 'infra', retryable: true };
+  return { failureClass: 'client', retryable: false };
+}
+
+/**
+ * `{ failureClass, retryable }` for anything thrown. A kosa8 Cloud answer's
+ * own `failure_class` and `retryable` are used as sent; otherwise no answer
+ * (a connection error or a request timeout) is retryable `infra`, an exec
+ * past its limit is `timeout`, and an HTTP error is classed by status and
+ * code as the server does. Anything that is not a kosa8 error is `error`
+ * (not retryable): a bug in your code.
+ */
+export function classifyFailure(e: unknown): { failureClass: FailureClass; retryable: boolean } {
+  if (!(e instanceof Kosa8Error)) return { failureClass: 'error', retryable: false };
+  const b = e.body;
+  if (typeof b === 'object' && b !== null && typeof (b as Record<string, unknown>).failure_class === 'string') {
+    const fc = (b as Record<string, unknown>).failure_class as FailureClass;
+    const rt = (b as Record<string, unknown>).retryable;
+    return { failureClass: fc, retryable: typeof rt === 'boolean' ? rt : fc === 'infra' };
+  }
+  if (e instanceof Kosa8ExecTimeoutError) return { failureClass: 'timeout', retryable: false };
+  if (e instanceof Kosa8ConnectionError) return { failureClass: 'infra', retryable: true };
+  if (e.status !== undefined) return failureOf(e.status, e.code);
+  return { failureClass: 'error', retryable: false };
+}
+
 /** Base class of every error this SDK throws. */
 export class Kosa8Error extends Error {
   /** HTTP status the daemon answered with, when there was an answer. */
@@ -77,6 +139,8 @@ export class Kosa8Error extends Error {
   readonly body?: unknown;
   /** kosa8 Cloud's stable error code (payment_required, quota_exceeded, ...). */
   readonly code?: string;
+  /** Seconds to wait before trying again, from a Retry-After header or `retry_after_s`; undefined when none. */
+  readonly retryAfter?: number;
 
   constructor(message: string, options: Kosa8ErrorOptions = {}) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
@@ -88,6 +152,21 @@ export class Kosa8Error extends Error {
     this.path = options.path;
     this.body = options.body;
     this.code = options.code;
+    this.retryAfter = options.retryAfter;
+  }
+
+  /**
+   * Whose fault it was: `timeout`, `infra`, `quota`, `client` (kosa8 Cloud's
+   * `failure_class` when the answer had one), or `error` for a failure that
+   * is not the API's. See `classifyFailure`.
+   */
+  get failureClass(): FailureClass {
+    return classifyFailure(this).failureClass;
+  }
+
+  /** Whether the same call may work if sent again (kosa8 Cloud's `retryable` when the answer had one). */
+  get retryable(): boolean {
+    return classifyFailure(this).retryable;
   }
 }
 
@@ -171,14 +250,7 @@ export class Kosa8PaymentRequiredError extends Kosa8ApiError {
 }
 
 /** Too many requests or a quota reached (429). */
-export class Kosa8RateLimitError extends Kosa8ApiError {
-  /** Seconds to wait, from the Retry-After header; undefined when there was none. */
-  readonly retryAfter?: number;
-  constructor(message: string, options: Kosa8ErrorOptions = {}) {
-    super(message, options);
-    this.retryAfter = options.retryAfter;
-  }
-}
+export class Kosa8RateLimitError extends Kosa8ApiError {}
 
 /**
  * 423 org_frozen: the organization is frozen in the kosa8 Cloud Security
