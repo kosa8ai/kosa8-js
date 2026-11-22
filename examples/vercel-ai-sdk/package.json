@@ -1,0 +1,25 @@
+{
+  "name": "kosa8-example-vercel-ai-sdk",
+  "private": true,
+  "type": "module",
+  "description": "A Vercel AI SDK 7 coding agent whose shell and files live in a kosa8 Cloud sandbox.",
+  "scripts": {
+    "start": "tsx agent.ts",
+    "best-of-n": "tsx best-of-n.ts",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kosa8/ai-sdk-sandbox": "0.2.1",
+    "@kosa8/sdk": "0.5.2",
+    "ai": "7.0.179",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.20.3",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

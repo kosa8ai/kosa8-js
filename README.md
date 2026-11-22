@@ -14,6 +14,15 @@ curl -fsSL https://kosa8.com/install.sh | sh
 kosa8 daemon start
 ```
 
+## Examples
+
+Runnable agents on kosa8 Cloud, each with its own `package.json` (`npm install`, then `npx tsx ...`). Without a model key they use a scripted stand-in model, so the sandbox side still runs for real.
+
+| example | |
+| --- | --- |
+| [`examples/vercel-ai-sdk`](examples/vercel-ai-sdk) | Vercel AI SDK 7: a coding agent that writes, tests and fixes code in a sandbox (`experimental_sandbox`), and best-of-n over forks of one sandbox (`cloud.forkMap`) |
+| [`examples/openai-agents`](examples/openai-agents) | OpenAI Agents SDK: `run_command`, `read_file` and `write_file` tools in a per-run sandbox, with labels, timeouts and a network allow-list |
+
 ## Development
 
 ```sh
