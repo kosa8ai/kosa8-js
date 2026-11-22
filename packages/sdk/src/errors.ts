@@ -61,6 +61,8 @@ export interface Kosa8ErrorOptions {
   code?: string;
   /** Seconds from a Retry-After header, when the answer had one. */
   retryAfter?: number;
+  /** The request's id (X-Request-Id, else Cloudflare's cf-ray), to quote to kosa8 support. */
+  requestId?: string;
 }
 
 /**
@@ -141,6 +143,8 @@ export class Kosa8Error extends Error {
   readonly code?: string;
   /** Seconds to wait before trying again, from a Retry-After header or `retry_after_s`; undefined when none. */
   readonly retryAfter?: number;
+  /** The request's id (kosa8 Cloud's X-Request-Id, else Cloudflare's cf-ray header); quote it to kosa8 support. */
+  readonly requestId?: string;
 
   constructor(message: string, options: Kosa8ErrorOptions = {}) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
@@ -153,6 +157,12 @@ export class Kosa8Error extends Error {
     this.body = options.body;
     this.code = options.code;
     this.retryAfter = options.retryAfter;
+    this.requestId = options.requestId;
+  }
+
+  /** Same as `retryAfter`: seconds to wait before trying again, from Retry-After or the body's `retry_after_s`. */
+  get retryAfterS(): number | undefined {
+    return this.retryAfter;
   }
 
   /**
@@ -281,7 +291,7 @@ function isRefusal(v: unknown): v is ApprovalRefusal {
 export function errorFromResponse(
   status: number,
   body: unknown,
-  ctx: { method?: string; path?: string; code?: string; body?: unknown; retryAfter?: number } = {},
+  ctx: { method?: string; path?: string; code?: string; body?: unknown; retryAfter?: number; requestId?: string } = {},
 ): Kosa8ApiError {
   let daemonMessage: string | undefined;
   let remediation: string | undefined;

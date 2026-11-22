@@ -739,9 +739,12 @@ export class Kosa8Cloud {
   constructor(options: Kosa8CloudOptions = {}) {
     const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
     const key = (options.apiKey ?? env.KOSA8_API_KEY ?? '').trim();
-    if (!key) throw new Kosa8Error('no kosa8 Cloud API key: pass apiKey or set KOSA8_API_KEY');
+    if (!key) throw new Kosa8Error(`no kosa8 Cloud API key: set KOSA8_API_KEY or pass { apiKey }; make one at ${KEYS_URL}`);
     if (!key.startsWith(CLOUD_KEY_PREFIX) && !key.startsWith(CLOUD_TOKEN_PREFIX)) {
-      throw new Kosa8Error(`a kosa8 Cloud API key starts with ${CLOUD_KEY_PREFIX} (a capability token with ${CLOUD_TOKEN_PREFIX})`);
+      throw new Kosa8Error(
+        `a kosa8 Cloud API key starts with ${CLOUD_KEY_PREFIX} (a capability token with ${CLOUD_TOKEN_PREFIX}); ` +
+          `check KOSA8_API_KEY or copy the whole key from ${KEYS_URL}`,
+      );
     }
     this.apiKey = key;
     this.baseUrl = checkBase(options.baseUrl ?? env.KOSA8_CLOUD_URL ?? DEFAULT_CLOUD_URL);
@@ -906,9 +909,16 @@ export class Kosa8Cloud {
     } catch (e) {
       if (signal?.aborted && !timedOut) throw signal.reason ?? e;
       if (ctl.signal.aborted) {
-        throw new Kosa8TimeoutError(`kosa8 Cloud did not answer within ${this.timeoutMs} ms`, { method, path, cause: e });
+        throw new Kosa8TimeoutError(
+          `kosa8 Cloud did not answer ${method} ${path} within ${this.timeoutMs} ms; retry, or raise timeoutMs in new Kosa8Cloud({ timeoutMs })`,
+          { method, path, cause: e },
+        );
       }
-      throw new Kosa8ConnectionError(`could not reach kosa8 Cloud at ${this.baseUrl}: ${String((e as Error)?.message ?? e)}`, { method, path, cause: e });
+      throw new Kosa8ConnectionError(
+        `could not reach kosa8 Cloud at ${this.baseUrl}: ${String((e as Error)?.message ?? e)}; ` +
+          'check the network connection and KOSA8_CLOUD_URL (unset it for https://api.kosa8.com), then retry',
+        { method, path, cause: e },
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -941,19 +951,43 @@ function cloudError(resp: Response, body: unknown, ctx: { method: string; path: 
     status === 504 ||
     code === 'exec_timeout' ||
     (status === 502 && code === 'host_failed' && pathOnly.endsWith('/exec') && /timed out/i.test(message ?? ''));
+  const requestId = resp.headers?.get?.('X-Request-Id') || resp.headers?.get?.('cf-ray') || undefined;
   if (execTimeout) {
     const base = message ?? `request failed with HTTP ${status}`;
-    return new Kosa8ExecTimeoutError(`${base} (${EXEC_LIMIT_HINT})`, {
-      status, daemonMessage: message, body, code, ...ctx,
+    return new Kosa8ExecTimeoutError(`${base} (${EXEC_LIMIT_HINT})${requestId ? ` [request ${requestId}]` : ''}`, {
+      status, daemonMessage: message, body, code, ...ctx, ...(requestId ? { requestId } : {}),
     });
   }
-  let retryAfter = status === 429 || status === 503 ? parseRetryAfter(resp.headers?.get?.('Retry-After') ?? null) : undefined;
-  if (retryAfter === undefined && typeof body === 'object' && body !== null && typeof (body as Json).retry_after_s === 'number') {
-    retryAfter = (body as Json).retry_after_s as number;
+  let retryAfter = parseRetryAfter(resp.headers?.get?.('Retry-After') ?? null);
+  const b = typeof body === 'object' && body !== null ? (body as Json) : undefined;
+  if (retryAfter === undefined && typeof b?.retry_after_s === 'number' && b.retry_after_s > 0) {
+    retryAfter = b.retry_after_s;
   }
-  return errorFromResponse(status, message !== undefined ? { error: message } : body, {
-    ...ctx, code, body, ...(retryAfter !== undefined ? { retryAfter } : {}),
+  const e = errorFromResponse(status, message !== undefined ? { error: message } : body, {
+    ...ctx, code, body, ...(retryAfter !== undefined ? { retryAfter } : {}), ...(requestId ? { requestId } : {}),
   });
+  e.message = actionableMessage(e.message, { status, code, retryAfter, requestId, upgradeUrl: typeof b?.upgrade_url === 'string' ? b.upgrade_url : undefined });
+  return e;
+}
+
+/** Where a person makes or replaces a kosa8 Cloud API key. */
+export const KEYS_URL = 'https://app.kosa8.com/app#keys';
+
+/**
+ * The server's sentence plus what a reader needs to act: a key hint on a
+ * 401, then `[HTTP status code; retry in n s; request id; upgrade: url]`.
+ */
+function actionableMessage(
+  sentence: string,
+  o: { status: number; code?: string; retryAfter?: number; requestId?: string; upgradeUrl?: string },
+): string {
+  let m = sentence;
+  if (o.status === 401) m += ` (check KOSA8_API_KEY; make a new key at ${KEYS_URL})`;
+  const parts = [`HTTP ${o.status}${o.code ? ` ${o.code}` : ''}`];
+  if (o.retryAfter !== undefined) parts.push(`retry in ${Math.round(o.retryAfter * 10) / 10} s`);
+  if (o.requestId) parts.push(`request ${o.requestId}`);
+  if (o.upgradeUrl && !sentence.includes(o.upgradeUrl)) parts.push(`upgrade: ${o.upgradeUrl}`);
+  return `${m} [${parts.join('; ')}]`;
 }
 
 function createBody(opts: CloudCreateOptions): Json {

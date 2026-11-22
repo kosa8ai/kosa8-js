@@ -120,7 +120,8 @@ describe('Kosa8Cloud', () => {
     const pay = await cloud.sandboxes.create().catch((e) => e);
     expect(pay).toBeInstanceOf(Kosa8PaymentRequiredError);
     expect(pay.code).toBe('payment_required');
-    expect(pay.message).toBe('add a payment method to start running work');
+    expect(pay.daemonMessage).toBe('add a payment method to start running work');
+    expect(pay.message).toBe('add a payment method to start running work [HTTP 402 payment_required]');
     expect(pay.status).toBe(402);
 
     const quota = await cloud.sandboxes.create().catch((e) => e);
