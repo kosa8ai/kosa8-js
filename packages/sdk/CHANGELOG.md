@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Failure class `oom`: exit 137 with the guest kernel's OOM count raised (kosa8 Cloud reports it on exec and grade; a grade killed for memory has no reward). It can be added to a rollout mask.
+
 ## 0.5.0 — 2026-11-21
 
 The kosa8 Cloud API for RL training and fan-out, mirroring the Python SDK's `kosa8.rl` (0.5.0). Everything from 0.4.x works as before.

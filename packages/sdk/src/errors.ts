@@ -72,7 +72,7 @@ export interface Kosa8ErrorOptions {
  * `error` is the SDK's own: an exception that is not a kosa8 error (a bug
  * in your code).
  */
-export const FAILURE_CLASSES = ['ok', 'exit_nonzero', 'timeout', 'infra', 'quota', 'client', 'error'] as const;
+export const FAILURE_CLASSES = ['ok', 'exit_nonzero', 'timeout', 'oom', 'infra', 'quota', 'client', 'error'] as const;
 export type FailureClass = (typeof FAILURE_CLASSES)[number];
 
 const INFRA_CODES = new Set([
