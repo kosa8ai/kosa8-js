@@ -80,7 +80,7 @@ export type FailureClass = (typeof FAILURE_CLASSES)[number];
 const INFRA_CODES = new Set([
   'host_failed', 'not_ready', 'no_capacity', 'host_unreachable', 'host_unavailable', 'host_busy', 'host_restarting',
   'wake_failed', 'try_again', 'internal', 'kernel_failed', 'egress_failed', 'dns_unreachable', 'host_lost', 'host_removed',
-  'insufficient_storage', 'starting',
+  'insufficient_storage', 'starting', 'database_busy',
 ]);
 const RATE_CODES = new Set(['rate_limited', 'slow_down', 'too_soon']);
 const QUOTA_CODES = new Set([
