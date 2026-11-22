@@ -1,16 +1,13 @@
 # Changelog
 
-## Unreleased
-
-- An exec stopped by its own `timeoutS` throws `Kosa8ExecTimeoutError` without the hint about the 90 s buffered limit (it read as if the 90 s limit had stopped it), as in the Python, Go, Ruby and Java SDKs.
-- README: `npm install @kosa8/sdk` (the old `@^0.4.0` kept installs on 0.4.1); what persists between commands (only `/workspace`, unless the sandbox is persistent) matches the server; `exec({ timeoutS })` is shown; a "same thing in each language" table for the five SDKs.
-
-## 0.5.3
+## 0.5.3 — 2026-11-22
 
 - Actionable kosa8 Cloud errors. An API error's message is the server's sentence followed by `[HTTP <status> <code>; retry in <n> s; request <id>]` (and `; upgrade: <url>` on a 402 whose sentence lacks it); the bare sentence stays in `daemonMessage`. A 401 adds "check KOSA8_API_KEY; make a new key at https://app.kosa8.com/app#keys".
 - `Kosa8Error.requestId`: the answer's `X-Request-Id`, else Cloudflare's `cf-ray`, to quote to kosa8 support.
 - `retryAfter` now reads a Retry-After header on any error status (it was 429 and 503 only), falling back to the body's `retry_after_s` (409 `template_building`, 409 `idempotency_in_progress`, 503 `no_capacity`); new alias `retryAfterS`.
 - Client-side errors say what to do next: a missing or malformed key points at `KOSA8_API_KEY` and https://app.kosa8.com/app#keys, a timeout says to retry or raise `timeoutMs`, a connection failure says to check the network and `KOSA8_CLOUD_URL`.
+- An exec stopped by its own `timeoutS` throws `Kosa8ExecTimeoutError` without the hint about the 90 s buffered limit (it read as if the 90 s limit had stopped it), as in the Python, Go, Ruby and Java SDKs.
+- README: `npm install @kosa8/sdk` (the old `@^0.4.0` kept installs on 0.4.1); what persists between commands (only `/workspace`, unless the sandbox is persistent) matches the server; `exec({ timeoutS })` is shown; a "same thing in each language" table for the five SDKs.
 
 ## 0.5.2
 
