@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Cloud browsers: `cloud.browser({ ttlS, sandboxId, name })` opens headless Chromium and returns a `CloudBrowser` with `id`, `cdpUrl` (for Playwright `connectOverCDP` / Puppeteer `connect({ browserWSEndpoint })`), `refresh()`, `goto(url, { text })`, `screenshot(url, { fullPage })` (PNG bytes), `page(...)`, `close()` and `[Symbol.asyncDispose]` (`await using`). Also `cloud.browsers.create/list/get/delete/info`, `cloud.listBrowsers({ state })` and `cloud.getBrowser(id)`. $0.12 per browser-hour, billed per second.
+- AI gateway: `cloud.ai` (`settings`, `updateSettings`, `setKey`, `keys`, `deleteKey`, `usage(month)`) and the shortcuts `cloud.setAiKey`, `listAiKeys`, `deleteAiKey`, `aiSettings`, `updateAiSettings`, `aiUsage`. `sandboxes.create({ aiGateway: true | false })`.
+
 ## 0.5.3 — 2026-11-22
 
 - Actionable kosa8 Cloud errors. An API error's message is the server's sentence followed by `[HTTP <status> <code>; retry in <n> s; request <id>]` (and `; upgrade: <url>` on a 402 whose sentence lacks it); the bare sentence stays in `daemonMessage`. A 401 adds "check KOSA8_API_KEY; make a new key at https://app.kosa8.com/app#keys".
