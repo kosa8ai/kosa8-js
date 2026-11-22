@@ -41,6 +41,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./e2b": {
+      "import": {
+        "types": "./dist/compat/e2b.d.ts",
+        "default": "./dist/compat/e2b.js"
+      },
+      "require": {
+        "types": "./dist/compat/e2b.d.cts",
+        "default": "./dist/compat/e2b.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [

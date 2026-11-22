@@ -43,7 +43,15 @@ With no `template`, a sandbox starts from the org's default, `base`:
 - Alpine Linux. `sh` is busybox: there is **no bash, python or git**. For Python, create with `{ template: 'python' }`, or pick another from `await cloud.templates()`.
 - Each exec is a fresh process, and files in `/workspace` persist for the sandbox's life. Anything else (installed packages, `cd`, `export`, files outside `/workspace`, processes a command leaves running) needs `{ persistent: true }`: without it a command may run in a fresh container that shares only `/workspace`. A persistent sandbox runs every exec in one long-lived container; the code interpreter (`runCode`) needs it, and it counts against your plan's persistent-sandbox limit.
 - `exec(cmd, { timeoutS: 30 })` stops a command in the sandbox when it runs that long.
-- A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background, then wait, poll or stop them:
+- A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. A **streamed exec** has no such limit and hands over output as it prints: `box.exec(cmd, { onStdout, onStderr })`, `box.exec(cmd, { timeoutS: 600 })` (a `timeoutS` over 90 streams), or iterate `box.execStream(cmd)`:
+
+  ```ts
+  const s = await box.execStream('npm test', { timeoutS: 1800 });
+  for await (const { stream, text } of s) process[stream].write(text);
+  console.log(s.exitCode);
+  ```
+
+  Or start long jobs in the background, then wait, poll or stop them:
 
   ```ts
   const job = await box.execBackground('sleep 120; echo done', { timeoutS: 600 });
@@ -67,6 +75,7 @@ With no `template`, a sandbox starts from the org's default, `base`:
 | `cloud.sandboxes.get(id)` → `CloudSandbox` | `GET /v1/sandboxes/{id}` |
 | `cloud.templates()` → `CloudTemplate[]` | `GET /v1/templates` |
 | `box.exec(cmd, { image?, env?, timeoutS?, signal? })` → `{ exitCode, stdout, stderr, wokeMs?, failureClass, retryable }` | `POST …/exec` (a string runs through `sh -c`) |
+| `box.exec(cmd, { onStdout?, onStderr?, stream? })` (same result) / `box.execStream(cmd, { image?, env?, timeoutS?, signal? })` → `CloudExecStream` (async iterable of `{ stream, text }`, `result({ onStdout, onStderr })`, `exitCode`, `close()`) | `POST …/exec {stream: true}` (NDJSON frames as the command prints; `timeoutS` up to 86400) |
 | `box.execBackground(cmd, { image?, env?, timeoutS?, signal? })` → `CloudBackgroundExec` (`status()`, `wait()`, `stop()`) | `POST …/exec {background: true}` → 202; `GET …/exec/{bg_id}`; `POST …/exec/{bg_id}/stop` |
 | `box.getExec(bgId)` → `CloudBackgroundExec` | `GET …/exec/{bg_id}` |
 | `box.waitUntilRunning({ timeoutMs? })` | polls `GET` while `creating` |
@@ -348,6 +357,27 @@ try {
   }
 }
 ```
+
+### E2B shim (`@kosa8/sdk/e2b`)
+
+Code written against E2B's JS SDK runs on kosa8 Cloud by changing one import:
+
+```ts
+import { Sandbox } from '@kosa8/sdk/e2b'; // was: import { Sandbox } from 'e2b'
+
+const sbx = await Sandbox.create(); // kosa8's python template; KOSA8_API_KEY
+await sbx.commands.run('pip install -q rich && python3 build.py', {
+  onStdout: (d) => process.stdout.write(d), // called as it prints
+  timeoutMs: 600_000,                        // over 90 s: a streamed exec
+});
+await sbx.files.write('notes.txt', 'hi');
+console.log(await sbx.files.read('notes.txt'));
+await sbx.kill();
+```
+
+It covers `Sandbox.create(template?, { timeoutMs, envs, metadata, allowInternetAccess, apiKey })`, `Sandbox.connect(id)`, `Sandbox.kill(id)`, `sandbox.sandboxId`, `kill()`, `setTimeout`, `getInfo`, `isRunning`, `pause`, `getHost`; `commands.run(cmd, { onStdout, onStderr, timeoutMs, envs, cwd, background })`, `commands.connect` / `kill`, the `CommandHandle` (`pid`, `wait({ onStdout })`, `kill()`); `files.read` / `write` / `list` / `exists` / `remove` / `makeDir` / `rename`. Anything else throws `Unsupported` (naming the kosa8 way), and errors come back as E2B's (`TimeoutError`, `NotFoundError`, `CommandExitError`, …) with the kosa8 error as `cause`. `sandbox.kosa8` is the `CloudSandbox` underneath.
+
+What streams: `commands.run` with `onStdout` / `onStderr`, or a `timeoutMs` over 90 s (or 0, no limit), is a streamed exec: callbacks fire as the command prints and it is not held to 90 s. A plain `commands.run` is buffered (90 s at most, output when it ends). A background command's output is polled about once a second (`CommandHandle.pollIntervalMs`) and passed to `onStdout` as it appears, stdout and stderr together. Only `/workspace` outlives a command unless the sandbox is persistent; relative paths are under `/workspace`. No stdin or PTY.
 
 ## The same thing in each language
 

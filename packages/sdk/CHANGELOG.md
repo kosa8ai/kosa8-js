@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Streamed exec: `box.execStream(cmd, { env, image, timeoutS, signal })` returns a `CloudExecStream`, an async iterable of `{ stream, text }` pieces as the command prints (`result({ onStdout, onStderr })`, `exitCode`, `stdout`, `stderr`, `close()`). `box.exec(cmd, { onStdout, onStderr, stream })` streams when given callbacks, `stream: true` or a `timeoutS` over 90. A streamed exec is not held to the 90 s buffered limit. `EXEC_LIMIT_S` is exported.
+- `@kosa8/sdk/e2b`: an E2B-compatible `Sandbox` (`create`, `connect`, `kill`, `sandboxId`, `setTimeout`, `getInfo`, `isRunning`, `pause`, `getHost`, `commands.run` with `onStdout` / `onStderr` / `timeoutMs` / `envs` / `cwd` / `background`, `commands.connect` / `kill`, `files.read` / `write` / `list` / `exists` / `remove` / `makeDir` / `rename`), with E2B's error classes and `Unsupported` for the rest. Callbacks stream; background output is polled about once a second.
+
 ## 0.6.0 - 2026-11-22
 
 - Retries on every request path: a POST that is not idempotent is now resent on the answers that refused it before anything ran, 503 `database_busy` (kosa8 Cloud's database was overloaded), 409 `template_building` (a benchmark environment still being built) and 429, with full-jitter backoff, bounded attempts, and at least the `Retry-After` header or the body's `retry_after` (new) / `retry_after_s` seconds. `retryable: true` in an error body is honoured as before. `database_busy`, `template_building` and `idempotency_in_progress` are retryable `infra` even without a body class, and `invalid_*`/`bad_*`/`missing_*`/`unknown_*` 4xx codes are `client`, as on the server.

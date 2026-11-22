@@ -24,6 +24,7 @@ import {
   Kosa8Error,
   Kosa8ExecTimeoutError,
   Kosa8NotFoundError,
+  Kosa8StreamError,
   Kosa8TimeoutError,
   classifyFailure,
   errorFromResponse,
@@ -476,6 +477,166 @@ export interface CloudExecOptions {
   timeoutS?: number;
   /** Abort the request. The command itself may keep running in the sandbox. */
   signal?: AbortSignal;
+  /**
+   * Called with each piece of stdout as the command prints it. Giving
+   * `onStdout` or `onStderr` makes it a streamed exec (see `execStream`).
+   */
+  onStdout?: (text: string) => void;
+  /** Called with each piece of stderr as the command prints it. */
+  onStderr?: (text: string) => void;
+  /**
+   * Stream the answer: true always, false never. Default: stream when
+   * `onStdout` / `onStderr` is given or `timeoutS` is over 90, the
+   * buffered limit a streamed exec is not held to.
+   */
+  stream?: boolean;
+}
+
+/** One piece of a streamed exec's output. */
+export interface CloudExecChunk {
+  stream: 'stdout' | 'stderr';
+  text: string;
+}
+
+/**
+ * A streamed exec's output as it arrives (`box.execStream`). Iterate it
+ * (`for await (const { stream, text } of s)`) for the pieces as the command
+ * prints them, heartbeats skipped and UTF-8 decoded across piece edges, or
+ * call `result({ onStdout, onStderr })`. Afterwards `exitCode` is set and
+ * `stdout` / `stderr` hold everything. Read it once.
+ */
+export class CloudExecStream implements AsyncIterable<CloudExecChunk> {
+  exitCode: number | null = null;
+  done = false;
+  private started = false;
+  private readonly out: { stdout: string[]; stderr: string[] } = { stdout: [], stderr: [] };
+  private readonly dec = { stdout: new TextDecoder(), stderr: new TextDecoder() };
+
+  /** @internal */
+  constructor(private readonly resp: Response, private readonly path: string) {}
+
+  get stdout(): string {
+    return this.out.stdout.join('');
+  }
+
+  get stderr(): string {
+    return this.out.stderr.join('');
+  }
+
+  /** Stop reading (closes the connection). */
+  async close(): Promise<void> {
+    try {
+      await this.resp.body?.cancel();
+    } catch {
+      // already closed
+    }
+  }
+
+  private keep(stream: 'stdout' | 'stderr', text: string): CloudExecChunk | null {
+    if (text === '') return null;
+    this.out[stream].push(text);
+    return { stream, text };
+  }
+
+  private *flush(): Generator<CloudExecChunk> {
+    for (const name of ['stdout', 'stderr'] as const) {
+      const c = this.keep(name, this.dec[name].decode());
+      if (c) yield c;
+    }
+  }
+
+  private *frame(line: string): Generator<CloudExecChunk> {
+    let f: Record<string, unknown>;
+    try {
+      f = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      throw new Kosa8StreamError(`kosa8 Cloud sent a stream line that is not JSON: ${line.slice(0, 200)}`,
+        { stdout: this.stdout, stderr: this.stderr }, { method: 'POST', path: this.path });
+    }
+    if (typeof f !== 'object' || f === null) return;
+    if (f.done) {
+      yield* this.flush();
+      this.done = true;
+      if (f.error !== undefined && f.error !== null) this.fail(f);
+      this.exitCode = Number.isInteger(f.exit) ? (f.exit as number) : null;
+      return;
+    }
+    const name = f.stream;
+    if ((name !== 'stdout' && name !== 'stderr') || typeof f.data !== 'string' || f.data === '') return; // a heartbeat
+    const c = this.keep(name, this.dec[name].decode(fromBase64(f.data), { stream: true }));
+    if (c) yield c;
+  }
+
+  private fail(f: Record<string, unknown>): never {
+    const msg = String(f.error || 'the command failed');
+    const code = typeof f.code === 'string' ? f.code : undefined;
+    const out = { stdout: this.stdout, stderr: this.stderr };
+    if (code === 'exec_timeout' || /timeout_s/.test(msg)) {
+      throw Object.assign(new Kosa8ExecTimeoutError(msg, { status: 504, code: 'exec_timeout', method: 'POST', path: this.path, daemonMessage: msg }), out);
+    }
+    throw new Kosa8StreamError(msg, out, { method: 'POST', path: this.path, ...(code ? { code } : {}) });
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<CloudExecChunk, void, undefined> {
+    if (this.started) return;
+    this.started = true;
+    const body = this.resp.body;
+    const lines = new TextDecoder();
+    let buf = '';
+    if (body) {
+      const reader = body.getReader();
+      try {
+        for (;;) {
+          let r: ReadableStreamReadResult<Uint8Array>;
+          try {
+            r = await reader.read();
+          } catch (e) {
+            throw new Kosa8StreamError(`the exec stream broke: ${String((e as Error)?.message ?? e)}`,
+              { stdout: this.stdout, stderr: this.stderr }, { method: 'POST', path: this.path, code: 'stream_broken', cause: e });
+          }
+          if (r.done) break;
+          buf += lines.decode(r.value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (line !== '') yield* this.frame(line);
+            if (this.done) return;
+          }
+        }
+      } finally {
+        reader.releaseLock();
+        if (!this.done) await this.close();
+      }
+    }
+    const rest = (buf + lines.decode()).trim();
+    if (rest !== '') yield* this.frame(rest);
+    if (this.done) return;
+    yield* this.flush();
+    this.done = true;
+    throw new Kosa8StreamError('the exec stream ended before the command finished (no final frame)',
+      { stdout: this.stdout, stderr: this.stderr }, { method: 'POST', path: this.path });
+  }
+
+  /** Read to the end, calling `onStdout` / `onStderr` with each piece as it arrives. */
+  async result(cb: { onStdout?: (text: string) => void; onStderr?: (text: string) => void } = {}): Promise<CloudExecResult> {
+    try {
+      for await (const c of this) (c.stream === 'stdout' ? cb.onStdout : cb.onStderr)?.(c.text);
+    } finally {
+      await this.close();
+    }
+    const exit = this.exitCode;
+    const fc = exit === null ? 'infra' : exit === 0 ? 'ok' : 'exit_nonzero';
+    return { exitCode: exit, stdout: this.stdout, stderr: this.stderr, failureClass: fc, retryable: fc === 'infra' };
+  }
+}
+
+function fromBase64(s: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(s, 'base64'));
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 
@@ -988,6 +1149,33 @@ export class Kosa8Cloud {
     return data as T;
   }
 
+  /**
+   * @internal Open a streamed (NDJSON) answer. A refusal before the stream
+   * starts throws the usual typed error (a 429 is retried); nothing is
+   * retried once output flows.
+   */
+  requestStream(method: string, path: string, body: unknown, opts: { signal?: AbortSignal } = {}): Promise<Response> {
+    return callWithRetry(() => this.requestStreamOnce(method, path, body, opts.signal), this.retry, {
+      signal: opts.signal,
+      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && retrySafe(method, path, false, e),
+    });
+  }
+
+  private async requestStreamOnce(method: string, path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+    const resp = await this.send(method, path, { json: body }, 'application/x-ndjson, application/json', signal);
+    if (!resp.ok) {
+      const text = await resp.text();
+      let data: unknown = text;
+      try {
+        data = text === '' ? null : JSON.parse(text);
+      } catch {
+        // not JSON; kept as text
+      }
+      throw cloudError(resp, data, { method, path });
+    }
+    return resp;
+  }
+
   /** @internal Raw bytes in and/or out (the files endpoints), retried as `request` is. */
   requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
     return callWithRetry(() => this.requestBytesOnce(method, path, bytes), this.retry, {
@@ -1057,6 +1245,9 @@ export class Kosa8Cloud {
     }
   }
 }
+
+/** The longest a buffered exec runs, in seconds; a streamed one is not held to it. */
+export const EXEC_LIMIT_S = 90;
 
 const EXEC_LIMIT_HINT =
   'a buffered kosa8 Cloud exec is stopped after 90 s; run long jobs in the background ' +
@@ -1414,9 +1605,38 @@ export class CloudSandbox {
    * commands with `execBackground`, which `stop()` can end.
    */
   async exec(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudExecResult> {
+    const long = typeof opts.timeoutS === 'number' && opts.timeoutS > EXEC_LIMIT_S;
+    if (opts.stream === true || (opts.stream === undefined && (opts.onStdout || opts.onStderr || long))) {
+      return (await this.execStream(cmd, opts)).result({ onStdout: opts.onStdout, onStderr: opts.onStderr });
+    }
     const body = execBody(cmd, opts);
     const r = await this.cloud.request<Parameters<typeof execResult>[0]>('POST', this.path('/exec'), body, { signal: opts.signal });
-    return execResult(r);
+    const res = execResult(r);
+    if (opts.onStdout && res.stdout) opts.onStdout(res.stdout);
+    if (opts.onStderr && res.stderr) opts.onStderr(res.stderr);
+    return res;
+  }
+
+  /**
+   * Start a command and read its output as it prints (a streamed exec). It
+   * is not held to the 90 s of a buffered exec; `timeoutS` (1..86400) stops
+   * it in the sandbox.
+   *
+   * ```ts
+   * const s = await box.execStream('make test');
+   * for await (const { stream, text } of s) process[stream].write(text);
+   * console.log(s.exitCode);
+   * ```
+   *
+   * A refusal (bad request, sandbox not running) throws here, before any
+   * output. A command stopped at `timeoutS` throws `Kosa8ExecTimeoutError`
+   * (with `stdout` / `stderr` so far) from the iteration; another failure
+   * mid-stream throws `Kosa8StreamError`.
+   */
+  async execStream(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudExecStream> {
+    const body = { ...execBody(cmd, opts), stream: true };
+    const resp = await this.cloud.requestStream('POST', this.path('/exec'), body, { signal: opts.signal });
+    return new CloudExecStream(resp, this.path('/exec'));
   }
 
   /** Snapshot it and free its VM; it then costs only snapshot storage. */
