@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Accepts @kosa8/sdk 0.5.0 (`^0.4.1 || ^0.5.0`).
+
 ## 0.2.0 — 2026-11-17
 
 kosa8 Cloud.
