@@ -41,6 +41,7 @@ import {
   CloudTokens,
 } from './cloud-more.js';
 import { CloudJobs } from './jobs.js';
+import { CloudApiKeys, CloudAudit, CloudBenchmarks, CloudRl, CloudWebhooks } from './cloud-org.js';
 import { CloudAi, CloudBrowsers } from './cloud-browser.js';
 import type { CloudAiSettingsUpdate, CloudBrowser, CloudBrowserOptions } from './cloud-browser.js';
 import type { CloudRecording } from './cloud-more.js';
@@ -72,6 +73,11 @@ import type {
 ensureDisposeSymbols();
 
 export const DEFAULT_CLOUD_URL = 'https://api.kosa8.com';
+
+/** This package's version (kept equal to package.json's by a test). */
+export const SDK_VERSION = '0.6.0';
+/** The User-Agent the cloud client sends outside a browser. */
+export const USER_AGENT = `kosa8-js/${SDK_VERSION}`;
 export const CLOUD_KEY_PREFIX = 'k8c_live_';
 /** A capability token from `cloud.tokens.create()` works as an API key too. */
 export const CLOUD_TOKEN_PREFIX = 'k8c_tok_';
@@ -542,10 +548,21 @@ export function newIdempotencyKey(): string {
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'PUT', 'DELETE']);
 const SAFE_POSTS = new Set(['/v1/sandboxes/heartbeat', '/v1/sandboxes/drain']);
 
-/** Whether a failed request may be sent again: safe to repeat, or a 429 (refused before anything was done). */
+/**
+ * Answers that refuse a request before anything was done, so even a POST
+ * that is not idempotent may be sent again: any 429, 503 `database_busy`
+ * (kosa8 Cloud's database was overloaded) and 409 `template_building` (the
+ * template's environment is still being built).
+ */
+export function refusedBeforeRun(e: unknown): boolean {
+  if (!(e instanceof Kosa8Error)) return false;
+  return e.status === 429 || (e.status === 503 && e.code === 'database_busy') || (e.status === 409 && e.code === 'template_building');
+}
+
+/** Whether a failed request may be sent again: safe to repeat, or refused before anything was done. */
 function retrySafe(method: string, path: string, idempotent: boolean, e: unknown): boolean {
   if (idempotent || SAFE_METHODS.has(method) || SAFE_POSTS.has(path.split('?')[0]!)) return true;
-  return e instanceof Kosa8Error && e.status === 429;
+  return refusedBeforeRun(e);
 }
 
 function toPolicy(r: Kosa8CloudOptions['retry']): RetryPolicy {
@@ -741,6 +758,16 @@ export class Kosa8Cloud {
   readonly browsers: CloudBrowsers;
   /** The AI gateway: provider keys, settings and usage. */
   readonly ai: CloudAi;
+  /** The org's API keys: list, create, revoke, rotate. */
+  readonly apiKeys: CloudApiKeys;
+  /** Webhook endpoints and their deliveries. */
+  readonly webhooks: CloudWebhooks;
+  /** The hash-chained audit log: list, verify, export. */
+  readonly audit: CloudAudit;
+  /** Ready-made benchmarks and their instances' environments. */
+  readonly benchmarks: CloudBenchmarks;
+  /** Org-wide RL calls: compare runs, alert rules. */
+  readonly rl: CloudRl;
   /** The retry policy every request uses unless it says otherwise. */
   readonly retry: RetryPolicy;
   /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
@@ -777,6 +804,11 @@ export class Kosa8Cloud {
     this.jobs = new CloudJobs(this);
     this.browsers = new CloudBrowsers(this);
     this.ai = new CloudAi(this);
+    this.apiKeys = new CloudApiKeys(this);
+    this.webhooks = new CloudWebhooks(this);
+    this.audit = new CloudAudit(this);
+    this.benchmarks = new CloudBenchmarks(this);
+    this.rl = new CloudRl(this);
     this.retry = toPolicy(options.retry);
   }
 
@@ -886,6 +918,46 @@ export class Kosa8Cloud {
     return this.request('GET', '/v1/usage');
   }
 
+  /** Spend day by day this month, top sandboxes, credit left and the projected month-end spend. */
+  usageInsights(): Promise<Json> {
+    return this.request('GET', '/v1/usage/insights');
+  }
+
+  /** The rate card: prices per vCPU, GiB, storage, browsers and so on. Needs no plan. */
+  pricing(): Promise<Json> {
+    return this.request('GET', '/v1/pricing');
+  }
+
+  /** The running-sandbox limit: `active`, `max_running`, `reached` and the last request for more. */
+  limits(): Promise<{ active: number; max_running: number; reached: boolean; last_request?: Json | null; [k: string]: unknown }> {
+    return this.request('GET', '/v1/limits');
+  }
+
+  /** Ask kosa8 for a higher running-sandbox limit (once a day); kosa8 answers the owner by email. */
+  requestLimit(maxRunning: number, reason?: string): Promise<Json> {
+    const body: Json = { max_running: maxRunning };
+    if (reason !== undefined) body.reason = reason;
+    return this.request('POST', '/v1/limits/request', body);
+  }
+
+  /** Sandboxes with their fork parents: `nodes`, `roots`, `forked`, for drawing the fork tree. */
+  lineage(): Promise<{ nodes: Json[]; roots: unknown[]; forked: number }> {
+    return this.request('GET', '/v1/lineage');
+  }
+
+  /**
+   * Checkpoints of every running or sleeping sandbox (up to 25), asked of
+   * each host; does not wake anything. A sandbox's own: `box.checkpoints()`.
+   */
+  checkpoints(): Promise<{ sandboxes: Json[]; truncated?: boolean; notes?: string[]; [k: string]: unknown }> {
+    return this.request('GET', '/v1/checkpoints');
+  }
+
+  /** The images behind the templates the org's hosts offer, with tag and digest. */
+  images(): Promise<{ images: Json[]; default_template?: string; [k: string]: unknown }> {
+    return this.request('GET', '/v1/images');
+  }
+
   /** Templates the org can create sandboxes from now. */
   async templates(): Promise<CloudTemplate[]> {
     return (await this.request<{ templates: CloudTemplate[] }>('GET', '/v1/templates')).templates ?? [];
@@ -955,6 +1027,8 @@ export class Kosa8Cloud {
     if (signal && anyOf) fetchSignal = anyOf([ctl.signal, signal]);
     else if (signal) signal.addEventListener('abort', () => ctl.abort(signal.reason), { once: true });
     const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: accept, ...extra };
+    // Outside a browser (where it is a forbidden header) say which SDK this is.
+    if (typeof (globalThis as { window?: unknown }).window === 'undefined') headers['User-Agent'] = USER_AGENT;
     let body: BodyInit | undefined;
     if (raw.bytes !== undefined) {
       headers['Content-Type'] = 'application/octet-stream';
@@ -1021,8 +1095,9 @@ function cloudError(resp: Response, body: unknown, ctx: { method: string; path: 
   }
   let retryAfter = parseRetryAfter(resp.headers?.get?.('Retry-After') ?? null);
   const b = typeof body === 'object' && body !== null ? (body as Json) : undefined;
-  if (retryAfter === undefined && typeof b?.retry_after_s === 'number' && b.retry_after_s > 0) {
-    retryAfter = b.retry_after_s;
+  if (retryAfter === undefined) {
+    const ra = typeof b?.retry_after === 'number' ? b.retry_after : b?.retry_after_s;
+    if (typeof ra === 'number' && Number.isFinite(ra) && ra > 0) retryAfter = ra;
   }
   const e = errorFromResponse(status, message !== undefined ? { error: message } : body, {
     ...ctx, code, body, ...(retryAfter !== undefined ? { retryAfter } : {}), ...(requestId ? { requestId } : {}),
@@ -1773,6 +1848,14 @@ export class CloudFunctions {
 
   async delete(name: string): Promise<void> {
     await this.cloud.request('DELETE', `/v1/functions/${encodeURIComponent(name)}`);
+  }
+
+  /** Its recent calls, newest first (with logs for keys that may read its code). */
+  async invocations(name: string, opts: { limit?: number } = {}): Promise<Json[]> {
+    const q = opts.limit !== undefined ? `?limit=${encodeURIComponent(String(opts.limit))}` : '';
+    return (await this.cloud.request<{ invocations?: Json[] }>(
+      'GET', `/v1/functions/${encodeURIComponent(name)}/invocations${q}`,
+    )).invocations ?? [];
   }
 
   /** Call it once. A handler that raises resolves with ok: false, not a throw. */

@@ -117,7 +117,7 @@ export type {
   CloudGradeOptions,
   CloudGradeResult,
 } from './cloud.js';
-export { CLOUD_SIZES, SMALL_CLOUD_SIZES } from './cloud.js';
+export { CLOUD_SIZES, SMALL_CLOUD_SIZES, SDK_VERSION, USER_AGENT } from './cloud.js';
 export type { CloudSize } from './cloud.js';
 export {
   CloudBackgroundExec,
@@ -185,6 +185,22 @@ export type {
   CloudRecordingList,
 } from './cloud-more.js';
 export { CloudBrowser, CloudBrowsers, CloudAi, BROWSER_PRICE_PER_HOUR_USD } from './cloud-browser.js';
+export { CloudApiKeys, CloudWebhooks, CloudAudit, CloudBenchmarks, CloudRl, CloudRlAlerts } from './cloud-org.js';
+export type {
+  CloudApiKey,
+  CloudNewApiKey,
+  CloudApiKeyOptions,
+  CloudWebhook,
+  CloudWebhookDelivery,
+  CloudAuditEvent,
+  CloudAuditQuery,
+  CloudAuditVerify,
+  CloudBenchmark,
+  CloudBenchmarkInstance,
+  CloudRlAlert,
+  CloudRlAlertKind,
+  CloudRlAlertOptions,
+} from './cloud-org.js';
 export type {
   CloudBrowserInfo,
   CloudBrowserOptions,

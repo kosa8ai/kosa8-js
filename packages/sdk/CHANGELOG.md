@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-22
+
+- Retries on every request path: a POST that is not idempotent is now resent on the answers that refused it before anything ran, 503 `database_busy` (kosa8 Cloud's database was overloaded), 409 `template_building` (a benchmark environment still being built) and 429, with full-jitter backoff, bounded attempts, and at least the `Retry-After` header or the body's `retry_after` (new) / `retry_after_s` seconds. `retryable: true` in an error body is honoured as before. `database_busy`, `template_building` and `idempotency_in_progress` are retryable `infra` even without a body class, and `invalid_*`/`bad_*`/`missing_*`/`unknown_*` 4xx codes are `client`, as on the server.
+- `cloud.apiKeys`: `list`, `create({ name, scopes, expiresInS })`, `revoke(id)`, `rotate(id, { graceS })`.
+- `cloud.webhooks`: `list`, `create(url, { events, description })`, `delete`, `deliveries(id, { limit })`, `test(id)`.
+- `cloud.audit`: `list({ sandboxId, actor, action, since, until, beforeSeq, limit })`, `verify()`, `export()` (the NDJSON export, parsed).
+- `cloud.benchmarks`: `list`, `get(name)`, `instances(name, { state, limit, cursor })`, `instance(name, id)`, `prepare(name, ids | 'all' | n, { seed })`.
+- `cloud.rl`: `compare(ids)` (2 to 4 runs) and `alerts` (`list({ runId })`, `create({ kind, threshold, window, runId })`, `update(id, { threshold, window, enabled })`, `delete(id)`).
+- `cloud.pricing()`, `cloud.limits()`, `cloud.requestLimit(maxRunning, reason)`, `cloud.usageInsights()`, `cloud.lineage()`, `cloud.checkpoints()` (every sandbox's), `cloud.images()`, `cloud.functions.invocations(name, { limit })`.
+- `cloud.browsers.cdp(id)`: a fresh CDP WebSocket URL and its expiry. `cloud.ai.gatewayUrl(provider, path?)`: the AI gateway's base URL (`…/v1/ai/gw/{provider}/`) for pointing an OpenAI or Anthropic client at it.
+- `SDK_VERSION` and `USER_AGENT` (`kosa8-js/0.6.0`), sent as the User-Agent outside a browser.
+- Background exec status/stop, preview, schedule and code-context deletes spell out their full `/v1/sandboxes/{id}/…` paths (no behaviour change).
+- README: small sizes in the quickstart, the retry rules, what persists between execs (each exec is a fresh process; `/workspace` lasts for the sandbox's life; the rest needs `persistent: true`), the AI gateway from outside a sandbox, and that overflow (Cloudflare) sandboxes have no fork, checkpoint or sleep (501 `not_available`, `Kosa8UnsupportedError`).
+
+### Also in 0.6.0 (merged earlier)
+
 - Cloud browsers: `cloud.browser({ ttlS, sandboxId, name })` opens headless Chromium and returns a `CloudBrowser` with `id`, `cdpUrl` (for Playwright `connectOverCDP` / Puppeteer `connect({ browserWSEndpoint })`), `refresh()`, `goto(url, { text })`, `screenshot(url, { fullPage })` (PNG bytes), `page(...)`, `close()` and `[Symbol.asyncDispose]` (`await using`). Also `cloud.browsers.create/list/get/delete/info`, `cloud.listBrowsers({ state })` and `cloud.getBrowser(id)`. $0.12 per browser-hour, billed per second.
 - AI gateway: `cloud.ai` (`settings`, `updateSettings`, `setKey`, `keys`, `deleteKey`, `usage(month)`) and the shortcuts `cloud.setAiKey`, `listAiKeys`, `deleteAiKey`, `aiSettings`, `updateAiSettings`, `aiUsage`. `sandboxes.create({ aiGateway: true | false })`.
 
