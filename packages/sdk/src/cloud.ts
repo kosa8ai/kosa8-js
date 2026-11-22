@@ -41,6 +41,8 @@ import {
   CloudTokens,
 } from './cloud-more.js';
 import { CloudJobs } from './jobs.js';
+import { CloudAi, CloudBrowsers } from './cloud-browser.js';
+import type { CloudAiSettingsUpdate, CloudBrowser, CloudBrowserOptions } from './cloud-browser.js';
 import type { CloudRecording } from './cloud-more.js';
 import { forkMap } from './forkmap.js';
 import type { ForkMapOptions, ForkResult } from './forkmap.js';
@@ -238,6 +240,13 @@ export interface CloudCreateOptions {
   runId?: string;
   /** The kosa8-desktop image and persistent only: record the desktop to MP4, saved to Recordings when it is deleted. */
   record?: boolean;
+  /**
+   * Route its model calls through the org's AI gateway (`cloud.ai`): it gets
+   * `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `KOSA8_AI_GATEWAY_URL` and
+   * `KOSA8_AI_TOKEN` in its env. `false` opts it out when the gateway covers
+   * all sandboxes.
+   */
+  aiGateway?: boolean;
   /**
    * The Idempotency-Key header. Default: a fresh UUID per call, reused
    * across that call's retries, so a retried create never makes two.
@@ -728,6 +737,10 @@ export class Kosa8Cloud {
   readonly recordings: CloudRecordings;
   /** Hosted jobs: kosa8 runs every task's rollout and grade server-side. */
   readonly jobs: CloudJobs;
+  /** Headless Chromium browsers driven over CDP ($0.12 per browser-hour, billed per second). */
+  readonly browsers: CloudBrowsers;
+  /** The AI gateway: provider keys, settings and usage. */
+  readonly ai: CloudAi;
   /** The retry policy every request uses unless it says otherwise. */
   readonly retry: RetryPolicy;
   /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
@@ -762,7 +775,53 @@ export class Kosa8Cloud {
     this.tokens = new CloudTokens(this);
     this.recordings = new CloudRecordings(this);
     this.jobs = new CloudJobs(this);
+    this.browsers = new CloudBrowsers(this);
+    this.ai = new CloudAi(this);
     this.retry = toPolicy(options.retry);
+  }
+
+  /**
+   * Open a headless Chromium browser; `await using b = await cloud.browser()`
+   * closes it on the way out. See `CloudBrowsers.create`.
+   */
+  browser(opts: CloudBrowserOptions = {}): Promise<CloudBrowser> {
+    return this.browsers.create(opts);
+  }
+
+  /** Open browsers (`state: 'all'` for closed ones too). */
+  listBrowsers(opts: { state?: 'open' | 'all' } = {}): Promise<CloudBrowser[]> {
+    return this.browsers.list(opts);
+  }
+
+  /** One browser, with a fresh `cdpUrl` while open. */
+  getBrowser(id: string): Promise<CloudBrowser> {
+    return this.browsers.get(id);
+  }
+
+  /** Store a provider key for the AI gateway. */
+  setAiKey(provider: string, key: string): Promise<Json> {
+    return this.ai.setKey(provider, key);
+  }
+
+  listAiKeys() {
+    return this.ai.keys();
+  }
+
+  deleteAiKey(provider: string): Promise<Json> {
+    return this.ai.deleteKey(provider);
+  }
+
+  aiSettings() {
+    return this.ai.settings();
+  }
+
+  updateAiSettings(opts: CloudAiSettingsUpdate): Promise<Json> {
+    return this.ai.updateSettings(opts);
+  }
+
+  /** AI gateway calls and cost for a month (`YYYY-MM`, default this one). */
+  aiUsage(month?: string) {
+    return this.ai.usage(month);
   }
 
   /**
@@ -1045,6 +1104,7 @@ function createBody(opts: CloudCreateOptions): Json {
   if (opts.egress !== undefined) body.egress = opts.egress;
   if (opts.secrets !== undefined) body.secrets = opts.secrets;
   if (opts.record !== undefined) body.record = opts.record;
+  if (opts.aiGateway !== undefined) body.ai_gateway = opts.aiGateway;
   return body;
 }
 

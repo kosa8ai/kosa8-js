@@ -220,6 +220,42 @@ await cloud.secrets.list();          // names and settings, never values
 await cloud.secrets.delete('OPENAI'); // { deleted, stillHeldBy }
 ```
 
+### Browsers (headless Chromium over CDP)
+
+A cloud browser is headless Chromium you drive over CDP with Playwright or
+Puppeteer, or use through quick page loads. $0.12 per browser-hour, billed per
+second; `ttlS` (30 to 3600, default 300) closes it on its own.
+
+```ts
+import { chromium } from 'playwright';
+
+await using b = await cloud.browser({ ttlS: 300 });        // closed on the way out
+const png = await b.screenshot('https://example.com');      // PNG bytes (a Buffer on Node); { fullPage: true } for the whole page
+const { title, text } = await b.goto('https://example.com');
+
+const browser = await chromium.connectOverCDP(b.cdpUrl!);   // valid 10 minutes; b.refresh() for a new one
+const page = browser.contexts()[0]?.pages()[0] ?? (await browser.newPage());
+await page.goto('https://example.com');
+await browser.close();
+
+await cloud.listBrowsers({ state: 'all' }); await cloud.getBrowser('brw_...'); await cloud.browsers.delete('brw_...');
+```
+
+Puppeteer: `puppeteer.connect({ browserWSEndpoint: b.cdpUrl })`.
+
+### AI gateway
+
+Model calls from sandboxes go through the org's gateway: provider keys stay on
+kosa8 Cloud, with caching, a rate limit and per-sandbox usage.
+
+```ts
+await cloud.setAiKey('openai', process.env.OPENAI_API_KEY!);   // never sent back; listAiKeys() shows a hint
+await cloud.updateAiSettings({ enabled: true, cacheTtlS: 3600, ratePerMin: 120 });
+const box = await cloud.sandboxes.create({ aiGateway: true }); // OPENAI_BASE_URL, ANTHROPIC_BASE_URL, KOSA8_AI_GATEWAY_URL, KOSA8_AI_TOKEN set
+console.log((await cloud.aiUsage('2026-11')).total);          // calls, cost_usd, tokens_in, tokens_out, cached, errors
+await cloud.deleteAiKey('openai');
+```
+
 ### Pipelines
 
 ```ts

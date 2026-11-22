@@ -184,6 +184,20 @@ export type {
   CloudRecording,
   CloudRecordingList,
 } from './cloud-more.js';
+export { CloudBrowser, CloudBrowsers, CloudAi, BROWSER_PRICE_PER_HOUR_USD } from './cloud-browser.js';
+export type {
+  CloudBrowserInfo,
+  CloudBrowserOptions,
+  CloudBrowserPage,
+  CloudBrowserPageOptions,
+  CloudBrowserList,
+  CloudAiSettings,
+  CloudAiSettingsValues,
+  CloudAiSettingsUpdate,
+  CloudAiKey,
+  CloudAiUsage,
+  CloudAiUsageTotal,
+} from './cloud-browser.js';
 export { CloudJobs, JOB_DONE_STATES, MAX_JOB_TASKS, jobDone, jobBody, loadJobTasks, encodeJobFiles } from './jobs.js';
 export type {
   CloudJob,
