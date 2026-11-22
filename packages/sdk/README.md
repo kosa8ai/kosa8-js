@@ -10,7 +10,7 @@ No runtime dependencies. ESM and CommonJS builds with `.d.ts` types. Node 18 or 
 ## kosa8 Cloud quickstart
 
 ```sh
-npm install @kosa8/sdk@^0.4.0
+npm install @kosa8/sdk
 export KOSA8_API_KEY=k8c_live_...   # make one at https://app.kosa8.com
 ```
 
@@ -40,7 +40,8 @@ await box.delete();
 With no `template`, a sandbox starts from the org's default, `base`:
 
 - Alpine Linux. `sh` is busybox: there is **no bash, python or git**. For Python, create with `{ template: 'python' }`, or pick another from `await cloud.templates()`.
-- Files written by one exec are there for the next, but each exec has its own processes: a process a buffered exec leaves behind is not guaranteed to outlive it unless the sandbox is `persistent`. `/workspace` is the data disk.
+- Only `/workspace` is sure to persist between commands. A command may run in a fresh container, so `cd`, `export`, processes it leaves running and anything written or installed outside `/workspace` may be gone by the next one. Create with `{ persistent: true }` (one long-lived container) to keep the whole filesystem and background processes; the code interpreter (`runCode`) needs it, and it counts against your plan's persistent-sandbox limit.
+- `exec(cmd, { timeoutS: 30 })` stops a command in the sandbox when it runs that long.
 - A buffered `exec` runs at most **90 s**; past that the Cloud API stops the command and answers 504 `exec_timeout`, raised as `Kosa8ExecTimeoutError`. Start long jobs in the background, then wait, poll or stop them:
 
   ```ts
@@ -279,6 +280,28 @@ try {
 }
 ```
 
+## The same thing in each language
+
+The five kosa8 SDKs (Python `kosa8`, JS `@kosa8/sdk`, Go `kosa8-go`, Ruby `kosa8`, Java
+`com.kosa8:kosa8`) call the same kosa8 Cloud API, but some names differ by language. The ones
+that catch people switching:
+
+| | Python | JS / TS | Go | Ruby | Java |
+|---|---|---|---|---|---|
+| client | `Kosa8Cloud()` | `new Kosa8Cloud()` | `kosa8.NewCloud(kosa8.CloudOptions{})`, returns `(cloud, err)` | `Kosa8::Cloud.new` | `Kosa8Cloud.builder().build()` |
+| lifetime on create | `ttl_s=3600` | `{ ttlS: 3600 }` | `CloudCreateOptions{TTLSeconds: 3600}` | `ttl_s: 3600` | `new CloudOptions.Create().ttlSeconds(3600)` |
+| persistent sandbox | `persistent=True` | `{ persistent: true }` | `CloudCreateOptions{Persistent: true}` | `persistent: true` | `.persistent(true)` |
+| sandbox id | `box.id` | `box.id` | `box.ID()`, a method (`fmt.Println(box.ID)` prints a func value; `go vet` reports it) | `box.id` | `box.id()` |
+| shell command | `box.exec("ls /")` | `box.exec('ls /')` | `box.ExecShell(ctx, "ls /", nil)` | `box.exec("ls /")` | `box.exec("ls /")` |
+| argv command | `box.exec(["ls", "/"])` | `box.exec(['ls', '/'])` | `box.Exec(ctx, []string{"ls", "/"}, nil)` | `box.exec(["ls", "/"])` | `box.exec(List.of("ls", "/"))` |
+| per-exec timeout | `exec(cmd, timeout_s=30)` | `exec(cmd, { timeoutS: 30 })` | `&kosa8.CloudExecOptions{TimeoutS: 30}` | `exec(cmd, timeout_s: 30)` | `exec(cmd, null, null, 30)` |
+| exit code | `r.exit_code` | `r.exitCode` | `r.ExitCode`, an `*int` (nil when the cloud sent none; `r.OK()` checks for 0) | `r.exit_code` | `r.exitCode()`, an `Integer` (may be null) |
+| files | `box.files.write` / `read_text` / `list` | `box.files.write` / `readText` / `list` | `box.Files().WriteString` / `ReadText` / `List(ctx, "")` | `box.files.write` / `read_text` / `list` | `box.files().write` / `readText` / `list()` |
+| no such sandbox | `Kosa8NotFoundError` | `Kosa8NotFoundError` | `*kosa8.Error` with `Kind` `KindNotFound` (`errors.Is(err, kosa8.ErrNotFound)`) | `Kosa8::NotFoundError` | `Kosa8Exception.NotFoundException` |
+
+In every SDK a non-zero exit is returned in the result, not raised. Only `/workspace` is sure to
+persist between commands, unless the sandbox is persistent.
+
 ## Local daemon
 
 `Kosa8Client` talks to the kosa8 daemon on your own machine over its unix socket. It covers sandboxes, running and exec'ing commands, the sandbox toolbox (code, files, git, shell sessions, terminals, previews, lifecycle, templates), checkpoint and rewind, fork, explore, and snapshots. Every endpoint, field and response shape comes from the daemon's source.
@@ -297,7 +320,7 @@ try {
 ### Install
 
 ```sh
-npm install @kosa8/sdk@^0.4.0
+npm install @kosa8/sdk
 ```
 
 ### Quickstart

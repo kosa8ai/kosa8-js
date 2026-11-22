@@ -407,6 +407,13 @@ describe('cloud error mapping', () => {
     expect(e.code).toBe('exec_timeout');
   });
 
+  it('an exec stopped by its own timeoutS has no hint about the 90 s limit', async () => {
+    const e = await fail([504, { error: 'exec_timeout', message: 'the command ran longer than its timeout_s of 3 s and was stopped' }], exec);
+    expect(e).toBeInstanceOf(Kosa8ExecTimeoutError);
+    expect(e.message).toMatch(/timeout_s of 3 s/);
+    expect(e.message).not.toMatch(/nohup/);
+  });
+
   it('502 host_failed on /exec that timed out is Kosa8ExecTimeoutError', async () => {
     const e = await fail([502, { error: 'host_failed', message: 'exec failed on the host: context deadline: timed out' }], exec);
     expect(e).toBeInstanceOf(Kosa8ExecTimeoutError);

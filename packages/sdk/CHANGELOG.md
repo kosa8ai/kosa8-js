@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- An exec stopped by its own `timeoutS` throws `Kosa8ExecTimeoutError` without the hint about the 90 s buffered limit (it read as if the 90 s limit had stopped it), as in the Python, Go, Ruby and Java SDKs.
+- README: `npm install @kosa8/sdk` (the old `@^0.4.0` kept installs on 0.4.1); what persists between commands (only `/workspace`, unless the sandbox is persistent) matches the server; `exec({ timeoutS })` is shown; a "same thing in each language" table for the five SDKs.
+
 ## 0.5.3
 
 - Actionable kosa8 Cloud errors. An API error's message is the server's sentence followed by `[HTTP <status> <code>; retry in <n> s; request <id>]` (and `; upgrade: <url>` on a 402 whose sentence lacks it); the bare sentence stays in `daemonMessage`. A 401 adds "check KOSA8_API_KEY; make a new key at https://app.kosa8.com/app#keys".
