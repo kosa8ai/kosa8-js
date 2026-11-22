@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 — unreleased
+
+- Actionable kosa8 Cloud errors. An API error's message is the server's sentence followed by `[HTTP <status> <code>; retry in <n> s; request <id>]` (and `; upgrade: <url>` on a 402 whose sentence lacks it); the bare sentence stays in `daemonMessage`. A 401 adds "check KOSA8_API_KEY; make a new key at https://app.kosa8.com/app#keys".
+- `Kosa8Error.requestId`: the answer's `X-Request-Id`, else Cloudflare's `cf-ray`, to quote to kosa8 support.
+- `retryAfter` now reads a Retry-After header on any error status (it was 429 and 503 only), falling back to the body's `retry_after_s` (409 `template_building`, 409 `idempotency_in_progress`, 503 `no_capacity`); new alias `retryAfterS`.
+- Client-side errors say what to do next: a missing or malformed key points at `KOSA8_API_KEY` and https://app.kosa8.com/app#keys, a timeout says to retry or raise `timeoutMs`, a connection failure says to check the network and `KOSA8_CLOUD_URL`.
+
 ## 0.5.2
 
 - `cloud.jobs`: hosted jobs on kosa8 Cloud, as in the Python SDK. `submit` (tasks as a list or JSONL text, solver and sealed grader, grader files from bytes or text; sent with an Idempotency-Key), `get`, `list({ status, project, limit, cursor })`, `cancel`, `wait({ progress, pollMs, timeoutMs })` and `estimate` (ranges of sandbox-hours and list USD; `sample: n` pilot jobs, `sampleJobId`). Also `jobBody`, `loadJobTasks`, `encodeJobFiles`, `jobDone`, `JOB_DONE_STATES`. Needs the kosa8 Cloud `/v1/jobs` routes.

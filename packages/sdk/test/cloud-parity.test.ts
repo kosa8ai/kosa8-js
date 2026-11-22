@@ -356,7 +356,8 @@ describe('cloud error mapping', () => {
     expect(e.code).toBe('spending_cap_reached');
     expect(e.upgradeUrl).toBe('https://app.kosa8.com/#billing');
     expect(e.agentMessage).toBe('Tell your person to raise the cap.');
-    expect(e.message).toBe('this month reached the spending cap');
+    expect(e.daemonMessage).toBe('this month reached the spending cap');
+    expect(e.message).toBe('this month reached the spending cap [HTTP 402 spending_cap_reached; upgrade: https://app.kosa8.com/#billing]');
   });
 
   it('402 without the extras answers null for them', async () => {
