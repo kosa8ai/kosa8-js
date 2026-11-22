@@ -65,8 +65,8 @@ describe('kosa8 Cloud defaults', () => {
     expect(c.baseUrl).toBe('https://api.kosa8.com');
   });
 
-  it('is version 0.4.1', () => {
-    expect(pkg.version).toBe('0.4.1');
+  it('is version 0.5.0', () => {
+    expect(pkg.version).toBe('0.5.0');
   });
 });
 
@@ -320,7 +320,7 @@ describe('checkpoints, rewind, fork, ports, templates', () => {
     await sbx.fork();
     expect(seen[1]!.body).toEqual({ n: 1 });
     await expect(sbx.fork(0)).rejects.toThrow(/n must be/);
-    await expect(sbx.fork(101)).rejects.toThrow(/n must be/);
+    await expect(sbx.fork(1001)).rejects.toThrow(/n must be/);
     expect(seen).toHaveLength(2);
   });
 
@@ -341,7 +341,8 @@ describe('checkpoints, rewind, fork, ports, templates', () => {
 
 describe('cloud error mapping', () => {
   const fail = async (answer: Answer, call: (c: Kosa8Cloud) => Promise<unknown>) => {
-    const { cloud } = cloudWith(() => answer);
+    // One answer each: retries are tested in rl-align.test.ts.
+    const cloud = new Kosa8Cloud({ apiKey: KEY, env: {}, fetch: stub(() => answer).f, retry: false });
     return call(cloud).then(() => { throw new Error('expected an error'); }, (e: any) => e);
   };
   const exec = (c: Kosa8Cloud) => new CloudSandbox(c, info()).exec('sleep 60');

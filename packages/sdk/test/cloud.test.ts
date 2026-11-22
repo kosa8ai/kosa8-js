@@ -69,7 +69,7 @@ describe('Kosa8Cloud', () => {
 
     const r = await box.exec('python3 -c "print(6*7)"', { env: { A: '1' } });
     expect(seen[1]!.body).toEqual({ cmd: ['sh', '-c', 'python3 -c "print(6*7)"'], env: ['A=1'] });
-    expect(r).toEqual({ exitCode: 0, stdout: '42\n', stderr: '', wokeMs: 70 });
+    expect(r).toEqual({ exitCode: 0, stdout: '42\n', stderr: '', wokeMs: 70, failureClass: 'ok', retryable: false });
 
     expect((await box.sleep()).info.state).toBe('sleeping');
     expect(box.state).toBe('sleeping');

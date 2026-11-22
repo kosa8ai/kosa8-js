@@ -62,8 +62,13 @@ export {
   Kosa8OrgFrozenError,
   Kosa8ExecTimeoutError,
   errorFromResponse,
+  FAILURE_CLASSES,
+  failureOf,
+  classifyFailure,
 } from './errors.js';
-export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule } from './errors.js';
+export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule, FailureClass } from './errors.js';
+export { RetryPolicy, NO_RETRY, callWithRetry } from './retry.js';
+export type { RetryPolicyOptions, RetryCallOptions } from './retry.js';
 export type * from './types.js';
 export {
   Kosa8Cloud,
@@ -77,6 +82,13 @@ export {
   MAX_TTL_S,
   MAX_SLEEP_AFTER_S,
   MAX_FORK_N,
+  MAX_FORK,
+  MAX_BATCH,
+  MIN_LEASE_S,
+  MAX_LEASE_S,
+  CLOUD_TOKEN_PREFIX,
+  RUN_LABEL,
+  newIdempotencyKey,
 } from './cloud.js';
 export type {
   Kosa8CloudOptions,
@@ -95,8 +107,17 @@ export type {
   CloudInvokeResult,
   CloudInvocation,
   CloudFunctionSpec,
+  CloudFanoutOptions,
+  CloudBatchOptions,
+  CloudForkOptions,
+  CloudFanoutFailure,
+  CloudSandboxBatch,
+  CloudSelector,
+  CloudDrainResult,
+  CloudGradeOptions,
+  CloudGradeResult,
 } from './cloud.js';
-export { CLOUD_SIZES } from './cloud.js';
+export { CLOUD_SIZES, SMALL_CLOUD_SIZES } from './cloud.js';
 export type { CloudSize } from './cloud.js';
 export {
   CloudBackgroundExec,
@@ -138,3 +159,33 @@ export type {
   CloudTerminal,
   CloudFileLink,
 } from './cloud-features.js';
+export {
+  CloudOrgTemplates,
+  CloudBurst,
+  CloudTokens,
+  CloudEmbeds,
+  CloudPreviewDomains,
+  CloudRecordings,
+} from './cloud-more.js';
+export type {
+  CloudOrgTemplate,
+  CloudOrgTemplateBuildOptions,
+  CloudOrgTemplateImportOptions,
+  CloudOrgTemplateImport,
+  CloudBurstStatus,
+  CloudBurstActivation,
+  CloudTokenScope,
+  CloudCapabilityToken,
+  CloudTokenOptions,
+  CloudEmbed,
+  CloudEmbedOptions,
+  CloudDnsRecord,
+  CloudPreviewDomain,
+  CloudRecording,
+  CloudRecordingList,
+} from './cloud-more.js';
+export { Kosa8CancelledError, Kosa8ItemTimeoutError } from './forkmap.js';
+export type { ForkMapOptions, ForkResult } from './forkmap.js';
+export * as rl from './rl/index.js';
+export { RlRun, withRun, Lease, lease, mapRollouts, Rollouts, DEFAULT_MASK, DEFAULT_LEASE_S } from './rl/index.js';
+export type { RlRunInfo, RlRunOptions, RolloutRow, RolloutFilters, LeaseOptions, RolloutResult, RolloutBase, MapRolloutsOptions } from './rl/index.js';

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 — 2026-11-21
+
+The kosa8 Cloud API for RL training and fan-out, mirroring the Python SDK's `kosa8.rl` (0.5.0). Everything from 0.4.x works as before.
+
+- `cloud.sandboxes.createMany(n, opts)` (`POST /v1/sandboxes/batch`, 1 to 1000): any create field, plus `labels`, `runId`, `leaseS`, `prefix`, `partialOk` (default true) and `wait`. Answers a `CloudSandboxBatch`: an array of `CloudSandbox` with `failed` (`index`, `code`, `message`, `failure_class`, `retryable`), `requested` and `created`. A sandbox that fails to boot is deleted and moved to `failed`.
+- `box.fork(n, { labels, runId, leaseS, prefix, partialOk })` or `box.fork({ n, … })`: up to 1000 copies (was 100). A plain `fork(n)` of at most 100 still sends `{ n }` and is all or nothing; it now answers a `CloudSandboxBatch` (still an array).
+- `cloud.sandboxes.heartbeat({ runId | labels | ids, extendS })`, `box.heartbeat()`, `cloud.sandboxes.drain({ runId | labels | ids })`.
+- `box.grade(cmd, { files, timeoutS, env, keep, runId, rollout })` and `cloud.sandboxes.grade(id, …)`: a sealed copy with no network and hidden files; `{ reward, metrics, rewardFrom, exitCode, stdout, stderr, failureClass, retryable, ms, graderId, kept, recorded, raw }`. `reward` is `null` when the command did not finish.
+- `create({ leaseS, runId, record, idempotencyKey })`: a lease (60 to 86400 s, not with `ttlS`), the `kosa8.run` label, desktop recording.
+- `create({ labels })` sends the labels in the create body (stored before it answers) instead of a second `PUT …/labels` call.
+- `Idempotency-Key` on creates, batches, forks and grades: a fresh UUID per call, reused across its retries (`newIdempotencyKey()`).
+- Retries: `new Kosa8Cloud({ retry })` takes a `RetryPolicy` (default 3 tries, full-jitter exponential backoff, at least Retry-After) or `false`. Applied to reads, PUTs, deletes, heartbeats, drains and the idempotent creates on infra failures, and to any request on a 429 that may pass. This is new behaviour: a transient 5xx or network failure on those calls is now retried before it is thrown. `RetryPolicy`, `NO_RETRY`, `callWithRetry`.
+- Failure classes: every `Kosa8Error` has `failureClass` and `retryable` (kosa8 Cloud's own when sent), and `retryAfter` (from Retry-After on 429 and 503, or `retry_after_s`). Exec results have `failureClass` and `retryable` (and `stdoutTruncated`/`stderrTruncated` when set). `FAILURE_CLASSES`, `failureOf`, `classifyFailure`.
+- `cloud.forkMap(base, fn, items, opts)`: `fn(child, item)` in its own fork per item, retried on infra failures, `timeoutMs`, abortable; children always deleted. `ForkResult`, `Kosa8CancelledError`, `Kosa8ItemTimeoutError`.
+- `await using box = await cloud.sandboxes.create()`, `box.dispose()` (a sandbox gone already is fine); `Lease` and `RlRun` are async-disposable too. `Symbol.asyncDispose` is defined on runtimes that lack it.
+- `rl` (also exported by name): `RlRun` (`rl.Run`) with `start`, `attach`, `list`, `map`, `record`, `flush`, `finish`, `summary`, `update`, `rollouts`, `export`, `exportRows`, `drain`; `withRun`; `Lease`/`lease` (heartbeats on an unref'd timer, drain on close, SIGINT, SIGTERM and `beforeExit`); `mapRollouts`, `Rollouts` (`rewards`, `mask`, `meanReward`, `byClass`, `groups()`), `DEFAULT_MASK`.
+- Org templates: `cloud.orgTemplates.build|import|get|list|delete|wait` (`/v1/templates`).
+- Small sizes: `SMALL_CLOUD_SIZES` (`0.25x0.5`, `0.5x1`, `1x2`); `CloudSize` includes them.
+- Capability tokens: `cloud.tokens.create|list|revoke` (`/v1/tokens`); a `k8c_tok_…` secret is accepted as `apiKey` (`CLOUD_TOKEN_PREFIX`).
+- Embeds: `box.embeds.create|list|revoke`. Custom preview domains: `box.previews.domains(port)` and `cloud.previewDomains(previewId)` with `add|list|get|remove`. Recordings: `cloud.recordings.list|link|delete`, `box.recordings()`, `create({ record: true })`. Burst Passes: `cloud.burst.get|activate`.
+- Constants: `MAX_FORK` (1000), `MAX_BATCH` (1000), `MIN_LEASE_S`, `MAX_LEASE_S`, `RUN_LABEL`. `MAX_FORK_N` (100) is now the all-or-nothing limit.
+
 ## 0.4.1 — 2026-11-17
 
 - `CloudExecOptions` takes `timeoutS` (the API's `timeout_s`, 1 to 86400, checked before any request) and `signal` (an `AbortSignal` that ends the request) for `box.exec` and `box.execBackground`.

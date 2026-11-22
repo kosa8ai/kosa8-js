@@ -23,9 +23,26 @@ import {
   Kosa8ConnectionError,
   Kosa8Error,
   Kosa8ExecTimeoutError,
+  Kosa8NotFoundError,
   Kosa8TimeoutError,
+  classifyFailure,
   errorFromResponse,
 } from './errors.js';
+import type { FailureClass } from './errors.js';
+import { NO_RETRY, RetryPolicy, callWithRetry } from './retry.js';
+import type { RetryPolicyOptions } from './retry.js';
+import { ensureDisposeSymbols } from './dispose.js';
+import {
+  CloudBurst,
+  CloudEmbeds,
+  CloudOrgTemplates,
+  CloudPreviewDomains,
+  CloudRecordings,
+  CloudTokens,
+} from './cloud-more.js';
+import type { CloudRecording } from './cloud-more.js';
+import { forkMap } from './forkmap.js';
+import type { ForkMapOptions, ForkResult } from './forkmap.js';
 import {
   CloudBackgroundExec,
   CloudCodeContexts,
@@ -49,8 +66,14 @@ import type {
   CloudTerminal,
 } from './cloud-features.js';
 
+ensureDisposeSymbols();
+
 export const DEFAULT_CLOUD_URL = 'https://api.kosa8.com';
 export const CLOUD_KEY_PREFIX = 'k8c_live_';
+/** A capability token from `cloud.tokens.create()` works as an API key too. */
+export const CLOUD_TOKEN_PREFIX = 'k8c_tok_';
+/** The label a run's sandboxes carry: `kosa8.run=<run id>`. Heartbeat and drain select by it. */
+export const RUN_LABEL = 'kosa8.run';
 
 export interface Kosa8CloudOptions {
   /** API key. Defaults to the KOSA8_API_KEY environment variable. */
@@ -63,6 +86,14 @@ export interface Kosa8CloudOptions {
   fetch?: typeof fetch;
   /** Per-request timeout. Default 120 s. */
   timeoutMs?: number;
+  /**
+   * Retries with backoff and jitter (default `new RetryPolicy()`: 3 tries).
+   * Applied where sending again is safe: reads, PUTs, deletes, heartbeats and
+   * drains on infra failures; creates, batches, forks and grades too, since
+   * they carry an Idempotency-Key; any request on a 429 that may pass
+   * (waiting at least its Retry-After). `false` turns it off.
+   */
+  retry?: RetryPolicy | RetryPolicyOptions | false;
 }
 
 /** Shortest and longest lifetime `ttlS` accepts, in seconds (1 minute to 90 days). */
@@ -70,8 +101,15 @@ export const MIN_TTL_S = 60;
 export const MAX_TTL_S = 7_776_000;
 /** Longest idle time before sleep `sleepAfterS` accepts, in seconds (7 days). */
 export const MAX_SLEEP_AFTER_S = 604_800;
-/** Most copies one fork makes. */
+/** Most copies an all-or-nothing fork (a plain `fork(n)`) makes. */
 export const MAX_FORK_N = 100;
+/** Most copies one fork call makes (partial: made 100 at a time). */
+export const MAX_FORK = 1000;
+/** Most sandboxes one `createMany` makes. */
+export const MAX_BATCH = 1000;
+/** Shortest and longest lease `leaseS` accepts, in seconds (1 minute to 1 day). */
+export const MIN_LEASE_S = 60;
+export const MAX_LEASE_S = 86_400;
 
 /** A cloud sandbox as the API reports it (the OpenAPI `Sandbox` schema). Times are Unix ms. */
 export interface CloudSandboxInfo {
@@ -115,12 +153,22 @@ export interface CloudSandboxInfo {
   docker?: boolean;
   cpu?: 'shared' | 'dedicated' | (string & {}) | null;
   labels?: Record<string, string>;
+  /** A lease's window in seconds (heartbeats move `delete_after` to now + it); null when not leased. */
+  lease_s?: number | null;
+  /** It records its desktop to MP4 (saved to Recordings when it is deleted). */
+  record?: boolean;
   [k: string]: unknown;
 }
 
-/** vCPU x GiB sizes a sized create takes. */
+/** vCPU x GiB sizes a sized create takes (the standard size and up). */
 export const CLOUD_SIZES = ['2x4', '4x8', '8x16', '16x32'] as const;
-export type CloudSize = (typeof CLOUD_SIZES)[number];
+/**
+ * Small sizes for fleets of mostly idle sandboxes: that much vCPU reserved
+ * and billed, bursting above it (to 1, 1 and 2 vCPU) while the host has idle
+ * CPU. Only a create takes them, on hosts that run them (else 501).
+ */
+export const SMALL_CLOUD_SIZES = ['0.25x0.5', '0.5x1', '1x2'] as const;
+export type CloudSize = (typeof CLOUD_SIZES)[number] | (typeof SMALL_CLOUD_SIZES)[number];
 
 export interface CloudCreateOptions {
   /**
@@ -140,12 +188,13 @@ export interface CloudCreateOptions {
   /** A paid kosa8 Store item only: its current price in USD, which the person agreed to. */
   acceptPrice?: number;
   /**
-   * vCPU x GiB: 2x4, 4x8, 8x16 or 16x32. With a size, `cpus`+`memMb`,
+   * vCPU x GiB: 2x4, 4x8, 8x16 or 16x32, or a small size (0.25x0.5, 0.5x1,
+   * 1x2; `SMALL_CLOUD_SIZES`). With a size, `cpus`+`memMb`,
    * `image` or `diskGb` the sandbox boots cold at that size (needs a payment
    * method); `create` waits until it is running unless `wait: false`.
    */
   size?: CloudSize | (string & {});
-  /** Or: the cpus and memMb of one of the sizes (4 and 8192 for 4x8). */
+  /** Or: the cpus and memMb of one of the sizes (4 and 8192 for 4x8, 0.25 and 512 for 0.25x0.5). */
   cpus?: number;
   memMb?: number;
   /**
@@ -175,12 +224,149 @@ export interface CloudCreateOptions {
   egress?: CloudEgressPolicy;
   /** Names of org secrets it holds (as placeholders). */
   secrets?: string[];
-  /** Labels to set once it is created (a second call, PUT …/labels). */
+  /** Labels (at most 16, kosa8.run included), sent with the create and stored before it answers. */
   labels?: Record<string, string>;
+  /**
+   * A lease (60..86400 s): it is deleted this long from now unless a
+   * heartbeat (`cloud.sandboxes.heartbeat`, or `rl.lease` in the
+   * background) extends it, so a crashed client leaks nothing. Not with
+   * `ttlS` or `deleteAfter`. Inside an `rl.Run` it defaults to the run's.
+   */
+  leaseS?: number;
+  /** Label it `kosa8.run=<runId>` for heartbeat, drain and the RL runs page. Inside an `rl.Run` it defaults to the run's. */
+  runId?: string;
+  /** The kosa8-desktop image and persistent only: record the desktop to MP4, saved to Recordings when it is deleted. */
+  record?: boolean;
+  /**
+   * The Idempotency-Key header. Default: a fresh UUID per call, reused
+   * across that call's retries, so a retried create never makes two.
+   */
+  idempotencyKey?: string;
   /** Wait until a cold-booting (202 creating) sandbox is running. Default true. */
   wait?: boolean;
   /** How long to wait for it. Default 5 minutes. */
   waitTimeoutMs?: number;
+}
+
+/** Options `createMany` and `fork` share. */
+export interface CloudFanoutOptions {
+  /** Labels for every sandbox made (at most 16, kosa8.run included). */
+  labels?: Record<string, string>;
+  /** Adds the label kosa8.run=<runId>. Inside an `rl.Run` it defaults to the run's. */
+  runId?: string;
+  /** Lease each one (60..86400 s); see `CloudCreateOptions.leaseS`. Inside an `rl.Run` it defaults to the run's. */
+  leaseS?: number;
+  /** Name them `<prefix>-0001`, `<prefix>-0002`, … */
+  prefix?: string;
+  /** true: make what fits and list the rest in `failed`; false: all or nothing. */
+  partialOk?: boolean;
+  /** The Idempotency-Key header (default a fresh UUID, reused across retries). */
+  idempotencyKey?: string;
+}
+
+/** `cloud.sandboxes.createMany(n, opts)`: any create field applies to every one. */
+export interface CloudBatchOptions
+  extends Omit<CloudCreateOptions, 'name' | 'labels' | 'runId' | 'leaseS' | 'idempotencyKey' | 'deleteAfter'>,
+    CloudFanoutOptions {
+  /** Default true here: make what fits. */
+  partialOk?: boolean;
+  /** Wait until every one is running (one that fails to boot is deleted and moved to `failed`). Default true. */
+  wait?: boolean;
+}
+
+/** `box.fork(n, opts)`. */
+export interface CloudForkOptions extends CloudFanoutOptions {
+  /** How many copies, 1..1000. Default 1. Over 100, or with any other option, the fork is partial unless `partialOk: false`. */
+  n?: number;
+}
+
+/** One sandbox a batch or fork did not make. */
+export interface CloudFanoutFailure {
+  /** Which of the requested sandboxes (0-based). */
+  index: number;
+  /** The error code, e.g. running_limit, quota_exceeded, no_capacity, host_failed. */
+  code: string;
+  message: string;
+  failure_class: FailureClass | (string & {});
+  retryable: boolean;
+  /** Set when it was made but failed to boot (and was deleted). */
+  id?: string;
+}
+
+/**
+ * The sandboxes a batch create or a fork made: a plain array of
+ * `CloudSandbox`, plus `failed` (one entry per sandbox not made),
+ * `requested` and `created`.
+ */
+export type CloudSandboxBatch = CloudSandbox[] & {
+  failed: CloudFanoutFailure[];
+  requested: number;
+  created: number;
+  /** The run they were labelled for, when there was one. */
+  runId?: string;
+};
+
+/** Which sandboxes a heartbeat or a drain is for: at least one; given together, all must match. */
+export interface CloudSelector {
+  /** Sandboxes labelled kosa8.run=<runId>. */
+  runId?: string;
+  /** Sandboxes with all of these labels. */
+  labels?: Record<string, string>;
+  /** These sandboxes (ids or `CloudSandbox`es), up to 1000. */
+  ids?: (string | { id: string })[];
+}
+
+/** What `cloud.sandboxes.drain` answered. */
+export interface CloudDrainResult {
+  deleted: number;
+  ids: string[];
+  failed: { id: string; code: string; message: string; failure_class?: string; retryable?: boolean }[];
+  /** More than 1000 matched: call again. */
+  more: boolean;
+}
+
+/** `box.grade(cmd, opts)`. */
+export interface CloudGradeOptions {
+  /** Hidden files, `{ '/abs/path': 'text' | Uint8Array }`: at most 64, 8 MiB in all. Written only in the sealed copy. */
+  files?: Record<string, string | Uint8Array>;
+  /** 1..90 s. */
+  timeoutS?: number;
+  env?: Record<string, string>;
+  /** Keep the copy (with a 1 h lease) to look at. Default false deletes it. */
+  keep?: boolean;
+  /** Record the result as a rollout of this RL run. Inside an `rl.Run` it defaults to the run's. */
+  runId?: string;
+  /** The rollout's place in the run. */
+  rollout?: { step?: number; group?: string | number; index?: number; meta?: Record<string, unknown> };
+  /** The Idempotency-Key header (default a fresh UUID, reused across retries). */
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}
+
+/** What `box.grade` answered. */
+export interface CloudGradeResult {
+  /**
+   * The last stdout line that is JSON with a numeric `reward`, else 1.0 on
+   * exit 0 and 0.0 otherwise; null when the command did not finish (mask
+   * it rather than scoring it 0).
+   */
+  reward: number | null;
+  metrics: Record<string, unknown>;
+  rewardFrom: 'json' | 'exit' | null;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  /** ok, exit_nonzero, timeout, infra or quota. */
+  failureClass: FailureClass | (string & {});
+  retryable: boolean;
+  ms: number | null;
+  /** The sealed copy's id (deleted unless `keep`). */
+  graderId: string | null;
+  kept: boolean;
+  /** Whether it was recorded on the run. */
+  recorded: boolean;
+  /** The whole answer. */
+  raw: Record<string, unknown>;
 }
 
 export interface CloudUpdateOptions {
@@ -283,6 +469,13 @@ export interface CloudExecResult {
   stderr: string;
   /** Set when the sandbox was asleep and woke for this command. */
   wokeMs?: number;
+  /** ok (exit 0), exit_nonzero, or infra (the host gave no exit code); as the API sent it, else worked out from the exit code. */
+  failureClass: 'ok' | 'exit_nonzero' | 'infra' | (string & {});
+  /** Whether running it again may give another result (true only for infra). */
+  retryable: boolean;
+  /** The middle of stdout was dropped (a buffered exec keeps the first and last 1 MiB). */
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
 }
 
 export interface CloudInvocation {
@@ -316,6 +509,41 @@ export interface CloudFunctionSpec {
 
 type Json = Record<string, unknown>;
 
+/** @internal What `Kosa8Cloud.request` takes besides the call. */
+export interface CloudRequestOptions {
+  signal?: AbortSignal;
+  /** Send this Idempotency-Key (and so retry a POST on infra failures too). */
+  idempotencyKey?: string;
+  /** This call's retry policy instead of the client's. */
+  retry?: RetryPolicy;
+}
+
+/** A random UUID v4, for Idempotency-Key. */
+export function newIdempotencyKey(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  const h = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16));
+  h[12] = '4';
+  h[16] = ((parseInt(h[16]!, 16) & 0x3) | 0x8).toString(16);
+  const s = h.join('');
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
+}
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'PUT', 'DELETE']);
+const SAFE_POSTS = new Set(['/v1/sandboxes/heartbeat', '/v1/sandboxes/drain']);
+
+/** Whether a failed request may be sent again: safe to repeat, or a 429 (refused before anything was done). */
+function retrySafe(method: string, path: string, idempotent: boolean, e: unknown): boolean {
+  if (idempotent || SAFE_METHODS.has(method) || SAFE_POSTS.has(path.split('?')[0]!)) return true;
+  return e instanceof Kosa8Error && e.status === 429;
+}
+
+function toPolicy(r: Kosa8CloudOptions['retry']): RetryPolicy {
+  if (r === false) return NO_RETRY;
+  if (r instanceof RetryPolicy) return r;
+  return new RetryPolicy(r ?? {});
+}
+
 interface RawOptions {
   /** A JSON body. */
   json?: unknown;
@@ -330,6 +558,122 @@ function toMs(v: number | Date): number {
 function checkInt(name: string, v: number, min: number, max: number): void {
   if (!Number.isInteger(v) || v < min || v > max) {
     throw new Kosa8Error(`${name} must be a whole number from ${min} to ${max}, got ${v}`);
+  }
+}
+
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+const PREFIX_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,58}$/;
+
+function checkLease(name: string, v: number | undefined): void {
+  if (v !== undefined) checkInt(name, v, MIN_LEASE_S, MAX_LEASE_S);
+}
+
+function checkRunId(v: string | undefined): void {
+  if (v !== undefined && !RUN_ID_RE.test(v)) {
+    throw new Kosa8Error("runId must be 1-128 letters, digits, '_', '.', ':' or '-', starting with a letter or digit");
+  }
+}
+
+function checkLabels(labels: Record<string, string> | undefined): void {
+  if (labels !== undefined && Object.keys(labels).length > 16) throw new Kosa8Error('a sandbox has at most 16 labels');
+}
+
+/** The run an `rl.Run` set on this client while it is open (runId, leaseS). */
+function ambient(cloud: Kosa8Cloud): { runId?: string; leaseS?: number } {
+  return cloud._runDefaults ?? {};
+}
+
+function fanoutBody(o: CloudFanoutOptions): Json {
+  const body: Json = {};
+  checkRunId(o.runId);
+  checkLease('leaseS', o.leaseS);
+  const labels = o.labels !== undefined || o.runId !== undefined ? { ...(o.labels ?? {}) } : undefined;
+  if (labels && o.runId !== undefined) labels[RUN_LABEL] = o.runId;
+  checkLabels(labels);
+  if (o.labels !== undefined) body.labels = o.labels;
+  if (o.runId !== undefined) body.run_id = o.runId;
+  if (o.leaseS !== undefined) body.lease_s = o.leaseS;
+  if (o.prefix !== undefined) {
+    if (!PREFIX_RE.test(o.prefix)) throw new Kosa8Error("prefix must be 1-59 letters, digits, '.', '_' or '-', starting with a letter or digit");
+    body.prefix = o.prefix;
+  }
+  if (o.partialOk !== undefined) body.partial_ok = o.partialOk;
+  return body;
+}
+
+function selectorBody(sel: CloudSelector): Json {
+  const body: Json = {};
+  if (sel.runId) body.run_id = sel.runId;
+  if (sel.labels && Object.keys(sel.labels).length) body.labels = sel.labels;
+  if (sel.ids && sel.ids.length) {
+    if (sel.ids.length > 1000) throw new Kosa8Error('at most 1000 ids a call');
+    body.ids = sel.ids.map((i) => (typeof i === 'string' ? i : i.id));
+  }
+  if (Object.keys(body).length === 0) throw new Kosa8Error('give runId, labels or ids: which sandboxes');
+  return body;
+}
+
+function toBatch(boxes: CloudSandbox[], failed: CloudFanoutFailure[], requested: number, runId?: string): CloudSandboxBatch {
+  const out = boxes as CloudSandboxBatch;
+  out.failed = failed;
+  out.requested = requested;
+  Object.defineProperty(out, 'created', { get: () => out.length, enumerable: false, configurable: true });
+  if (runId !== undefined) out.runId = runId;
+  return out;
+}
+
+function b64(data: string | Uint8Array): string {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  const B = (globalThis as { Buffer?: { from(b: Uint8Array): { toString(enc: string): string } } }).Buffer;
+  if (B) return B.from(bytes).toString('base64');
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+}
+
+function execResult(r: {
+  exit: number | null; stdout?: string; stderr?: string; woke_ms?: number; failure_class?: string; retryable?: boolean;
+  stdout_truncated?: boolean; stderr_truncated?: boolean;
+}): CloudExecResult {
+  const exit = r.exit ?? null;
+  const fc = typeof r.failure_class === 'string' ? r.failure_class : !Number.isInteger(exit) ? 'infra' : exit === 0 ? 'ok' : 'exit_nonzero';
+  const out: CloudExecResult = {
+    exitCode: exit, stdout: r.stdout ?? '', stderr: r.stderr ?? '', failureClass: fc,
+    retryable: typeof r.retryable === 'boolean' ? r.retryable : fc === 'infra',
+  };
+  if (typeof r.woke_ms === 'number') out.wokeMs = r.woke_ms;
+  if (r.stdout_truncated) out.stdoutTruncated = true;
+  if (r.stderr_truncated) out.stderrTruncated = true;
+  return out;
+}
+
+function gradeResult(r: Json): CloudGradeResult {
+  const exit = typeof r.exit === 'number' ? r.exit : null;
+  const reward = typeof r.reward === 'number' ? r.reward : null;
+  const fc = typeof r.failure_class === 'string' ? r.failure_class : exit === 0 ? 'ok' : exit === null ? 'infra' : 'exit_nonzero';
+  return {
+    reward,
+    metrics: typeof r.metrics === 'object' && r.metrics !== null ? (r.metrics as Json) : {},
+    rewardFrom: r.reward_from === 'json' || r.reward_from === 'exit' ? r.reward_from : null,
+    exitCode: exit,
+    stdout: typeof r.stdout === 'string' ? r.stdout : '',
+    stderr: typeof r.stderr === 'string' ? r.stderr : '',
+    failureClass: fc,
+    retryable: typeof r.retryable === 'boolean' ? r.retryable : fc === 'infra',
+    ms: typeof r.ms === 'number' ? r.ms : null,
+    graderId: typeof r.grader_id === 'string' ? r.grader_id : null,
+    kept: r.kept === true,
+    recorded: r.recorded === true,
+    raw: r,
+  };
+}
+
+/** Delete, ignoring a sandbox that is gone already or an API that does not answer (its lease or TTL then deletes it). */
+async function quietDelete(box: CloudSandbox): Promise<void> {
+  try {
+    await box.delete();
+  } catch {
+    // best effort
   }
 }
 
@@ -373,6 +717,18 @@ export class Kosa8Cloud {
   readonly secrets: CloudSecrets;
   /** CI runs, logs, artifacts and triggers. */
   readonly pipelines: CloudPipelines;
+  /** The org's own templates, built from an image or a Dockerfile and kept as a snapshot. */
+  readonly orgTemplates: CloudOrgTemplates;
+  /** Burst Passes: a raised running limit for some hours. */
+  readonly burst: CloudBurst;
+  /** Short-lived capability tokens limited to some scopes and sandboxes. */
+  readonly tokens: CloudTokens;
+  /** Desktop session recordings. */
+  readonly recordings: CloudRecordings;
+  /** The retry policy every request uses unless it says otherwise. */
+  readonly retry: RetryPolicy;
+  /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
+  _runDefaults?: { runId?: string; leaseS?: number };
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -381,7 +737,9 @@ export class Kosa8Cloud {
     const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
     const key = (options.apiKey ?? env.KOSA8_API_KEY ?? '').trim();
     if (!key) throw new Kosa8Error('no kosa8 Cloud API key: pass apiKey or set KOSA8_API_KEY');
-    if (!key.startsWith(CLOUD_KEY_PREFIX)) throw new Kosa8Error(`a kosa8 Cloud API key starts with ${CLOUD_KEY_PREFIX}`);
+    if (!key.startsWith(CLOUD_KEY_PREFIX) && !key.startsWith(CLOUD_TOKEN_PREFIX)) {
+      throw new Kosa8Error(`a kosa8 Cloud API key starts with ${CLOUD_KEY_PREFIX} (a capability token with ${CLOUD_TOKEN_PREFIX})`);
+    }
     this.apiKey = key;
     this.baseUrl = checkBase(options.baseUrl ?? env.KOSA8_CLOUD_URL ?? DEFAULT_CLOUD_URL);
     const f = options.fetch ?? globalThis.fetch;
@@ -393,6 +751,37 @@ export class Kosa8Cloud {
     this.snapshots = new CloudSnapshots(this);
     this.secrets = new CloudSecrets(this);
     this.pipelines = new CloudPipelines(this);
+    this.orgTemplates = new CloudOrgTemplates(this);
+    this.burst = new CloudBurst(this);
+    this.tokens = new CloudTokens(this);
+    this.recordings = new CloudRecordings(this);
+    this.retry = toPolicy(options.retry);
+  }
+
+  /**
+   * The custom domains of a preview by its id (`{sandbox_id}:{port}`, the
+   * `id` of a `CloudPreview`). `box.previews.domains(port)` is the same.
+   */
+  previewDomains(previewId: string): CloudPreviewDomains {
+    return new CloudPreviewDomains(this, `/v1/previews/${encodeURIComponent(previewId)}`);
+  }
+
+  /**
+   * Run `fn(child, item)` for every item, each in its own fork of `base`,
+   * `concurrency` at a time; results in input order. Children are forked
+   * ahead in batches, always deleted when `fn` settles, and all deleted if
+   * the map is aborted (`signal`). A failure is not thrown: its result has
+   * `error` and `failureClass`. Infra failures and rate limits are retried
+   * `retries` times on a fresh fork, with backoff and jitter; `timeoutMs`
+   * gives up on an item (`failureClass: 'timeout'`) and deletes its child.
+   */
+  forkMap<I, R>(
+    base: CloudSandbox,
+    fn: (child: CloudSandbox, item: I, index: number) => Promise<R>,
+    items: Iterable<I>,
+    opts: ForkMapOptions = {},
+  ): Promise<ForkResult<I, R>[]> {
+    return forkMap(base, fn, items, opts);
   }
 
   /** What this API offers, for feature detection. */
@@ -436,9 +825,20 @@ export class Kosa8Cloud {
     return (await this.request<{ templates: CloudTemplate[] }>('GET', '/v1/templates')).templates ?? [];
   }
 
-  /** @internal */
-  async request<T = Json>(method: string, path: string, body?: unknown, opts: { signal?: AbortSignal } = {}): Promise<T> {
-    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json', opts.signal);
+  /** @internal One call, retried as the policy and the call allow. */
+  request<T = Json>(method: string, path: string, body?: unknown, opts: CloudRequestOptions = {}): Promise<T> {
+    const policy = opts.retry ?? this.retry;
+    const idem = opts.idempotencyKey !== undefined;
+    return callWithRetry(() => this.requestOnce<T>(method, path, body, opts), policy, {
+      signal: opts.signal,
+      shouldRetry: (e, attempt) => policy.shouldRetry(e, attempt) && retrySafe(method, path, idem, e),
+    });
+  }
+
+  private async requestOnce<T>(method: string, path: string, body: unknown, opts: CloudRequestOptions): Promise<T> {
+    const extra: Record<string, string> = {};
+    if (opts.idempotencyKey !== undefined) extra['Idempotency-Key'] = opts.idempotencyKey;
+    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json', opts.signal, extra);
     const text = await resp.text();
     let data: unknown = text;
     try {
@@ -450,8 +850,14 @@ export class Kosa8Cloud {
     return data as T;
   }
 
-  /** @internal Raw bytes in and/or out (the files endpoints). */
-  async requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
+  /** @internal Raw bytes in and/or out (the files endpoints), retried as `request` is. */
+  requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
+    return callWithRetry(() => this.requestBytesOnce(method, path, bytes), this.retry, {
+      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && retrySafe(method, path, false, e),
+    });
+  }
+
+  private async requestBytesOnce(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
     const resp = await this.send(method, path, bytes !== undefined ? { bytes } : {}, 'application/octet-stream, application/json');
     const buf = new Uint8Array(await resp.arrayBuffer());
     if (!resp.ok) {
@@ -467,7 +873,9 @@ export class Kosa8Cloud {
     return buf;
   }
 
-  private async send(method: string, path: string, raw: RawOptions, accept: string, signal?: AbortSignal): Promise<Response> {
+  private async send(
+    method: string, path: string, raw: RawOptions, accept: string, signal?: AbortSignal, extra: Record<string, string> = {},
+  ): Promise<Response> {
     signal?.throwIfAborted();
     const ctl = new AbortController();
     let timedOut = false;
@@ -480,7 +888,7 @@ export class Kosa8Cloud {
     let fetchSignal = ctl.signal;
     if (signal && anyOf) fetchSignal = anyOf([ctl.signal, signal]);
     else if (signal) signal.addEventListener('abort', () => ctl.abort(signal.reason), { once: true });
-    const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: accept };
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: accept, ...extra };
     let body: BodyInit | undefined;
     if (raw.bytes !== undefined) {
       headers['Content-Type'] = 'application/octet-stream';
@@ -535,7 +943,10 @@ function cloudError(resp: Response, body: unknown, ctx: { method: string; path: 
       status, daemonMessage: message, body, code, ...ctx,
     });
   }
-  const retryAfter = status === 429 ? parseRetryAfter(resp.headers?.get?.('Retry-After') ?? null) : undefined;
+  let retryAfter = status === 429 || status === 503 ? parseRetryAfter(resp.headers?.get?.('Retry-After') ?? null) : undefined;
+  if (retryAfter === undefined && typeof body === 'object' && body !== null && typeof (body as Json).retry_after_s === 'number') {
+    retryAfter = (body as Json).retry_after_s as number;
+  }
   return errorFromResponse(status, message !== undefined ? { error: message } : body, {
     ...ctx, code, body, ...(retryAfter !== undefined ? { retryAfter } : {}),
   });
@@ -557,6 +968,13 @@ function createBody(opts: CloudCreateOptions): Json {
     body.ttl_s = opts.ttlS;
   }
   if (opts.deleteAfter !== undefined) body.delete_after = toMs(opts.deleteAfter);
+  if (opts.leaseS !== undefined) {
+    if (opts.ttlS !== undefined || opts.deleteAfter !== undefined) {
+      throw new Kosa8Error('give leaseS or ttlS/deleteAfter, not both: a lease is a TTL that heartbeats move forward');
+    }
+    checkLease('leaseS', opts.leaseS);
+    body.lease_s = opts.leaseS;
+  }
   if (opts.acceptPrice !== undefined) body.accept_price = opts.acceptPrice;
   if (opts.snapshot !== undefined) {
     const clash = (['template', 'size', 'cpus', 'memMb', 'image', 'diskGb', 'docker', 'persistent', 'cpu', 'region'] as const)
@@ -586,7 +1004,41 @@ function createBody(opts: CloudCreateOptions): Json {
   if (opts.env !== undefined) body.env = opts.env;
   if (opts.egress !== undefined) body.egress = opts.egress;
   if (opts.secrets !== undefined) body.secrets = opts.secrets;
+  if (opts.record !== undefined) body.record = opts.record;
   return body;
+}
+
+/** Poll every not-yet-running sandbox of `batch` until each settles; drop (and delete) the ones that fail. */
+async function waitAll(batch: CloudSandboxBatch, timeoutMs: number, partialOk: boolean): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  const keep: CloudSandbox[] = [];
+  try {
+    // One at a time, as boots run in parallel anyway: later ones have mostly settled by their turn.
+    for (const [i, box] of [...batch].entries()) {
+      try {
+        if (!SETTLED.has(box.info.state)) {
+          await box.waitUntilRunning({ timeoutMs: Math.max(1000, deadline - Date.now()) });
+        } else if (box.info.state === 'error') {
+          throw new Kosa8Error(`sandbox ${box.id} failed to start: ${box.info.last_error ?? 'no reason given'}`);
+        }
+        keep[i] = box;
+      } catch (e) {
+        if (!partialOk || !(e instanceof Kosa8Error)) throw e;
+        await quietDelete(box);
+        const fc = classifyFailure(e).failureClass;
+        batch.failed.push({
+          index: i, id: box.id, code: e.code ?? 'not_ready', message: e.message,
+          failure_class: fc === 'error' ? 'infra' : fc, retryable: true,
+        });
+      }
+    }
+  } catch (e) {
+    await Promise.all(batch.map(quietDelete));
+    throw e;
+  }
+  const kept = keep.filter(Boolean);
+  batch.length = 0;
+  batch.push(...kept);
 }
 
 /** States a sandbox does not leave on its own while booting. */
@@ -616,14 +1068,89 @@ export class CloudSandboxes {
    * request, and only one of them may be given.
    */
   async create(opts: CloudCreateOptions = {}): Promise<CloudSandbox> {
-    const body = createBody(opts);
-    const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body);
+    const amb = ambient(this.cloud);
+    const lifetime = opts.ttlS !== undefined || opts.deleteAfter !== undefined;
+    const o: CloudCreateOptions = {
+      ...opts,
+      leaseS: opts.leaseS ?? (lifetime ? undefined : amb.leaseS),
+      runId: opts.runId ?? amb.runId,
+    };
+    checkRunId(o.runId);
+    const labels = o.runId !== undefined ? { ...(o.labels ?? {}), [RUN_LABEL]: o.runId } : o.labels;
+    checkLabels(labels);
+    const body = createBody(o);
+    if (labels !== undefined) body.labels = labels;
+    const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body, {
+      idempotencyKey: opts.idempotencyKey ?? newIdempotencyKey(),
+    });
     const box = new CloudSandbox(this.cloud, r.sandbox);
     if (opts.wait !== false && !SETTLED.has(box.info.state)) {
-      await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
+      try {
+        await box.waitUntilRunning(opts.waitTimeoutMs !== undefined ? { timeoutMs: opts.waitTimeoutMs } : {});
+      } catch (e) {
+        // It was made but did not come up: do not leave it running.
+        await quietDelete(box);
+        throw e;
+      }
     }
-    if (opts.labels !== undefined) await box.setLabels(opts.labels);
     return box;
+  }
+
+  /**
+   * Start `n` (1..1000) sandboxes in one call (`POST /v1/sandboxes/batch`);
+   * kosa8 Cloud paces the creates itself, so there is no 429 storm. With
+   * `partialOk` (the default here) the ones it could not make (past the
+   * plan's running limit, say: code `running_limit`) are listed in
+   * `failed`; with `partialOk: false` it is all or nothing and the refusal
+   * is thrown. `wait` (default true) polls each one until it is running; one
+   * that fails to boot is deleted and moved to `failed`.
+   */
+  async createMany(n: number, opts: CloudBatchOptions = {}): Promise<CloudSandboxBatch> {
+    checkInt('n', n, 1, MAX_BATCH);
+    const amb = ambient(this.cloud);
+    const { labels, runId, leaseS, prefix, partialOk, idempotencyKey, wait, waitTimeoutMs, ...create } = opts;
+    const fan: CloudFanoutOptions = {
+      labels, prefix, partialOk: partialOk ?? true,
+      runId: runId ?? amb.runId,
+      leaseS: leaseS ?? (create.ttlS !== undefined ? undefined : amb.leaseS),
+    };
+    if (fan.leaseS !== undefined && create.ttlS !== undefined) throw new Kosa8Error('give leaseS or ttlS, not both');
+    const body: Json = { count: n, ...createBody(create), ...fanoutBody(fan) };
+    const r = await this.cloud.request<{
+      sandboxes?: CloudSandboxInfo[]; failed?: CloudFanoutFailure[]; requested?: number; run_id?: string;
+    }>('POST', '/v1/sandboxes/batch', body, { idempotencyKey: idempotencyKey ?? newIdempotencyKey() });
+    const batch = toBatch(
+      (r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s)), r.failed ?? [], r.requested ?? n, r.run_id ?? fan.runId,
+    );
+    if (wait !== false) await waitAll(batch, waitTimeoutMs ?? 300_000, fan.partialOk !== false);
+    return batch;
+  }
+
+  /**
+   * Push back the leases of the matching leased sandboxes to now + `extendS`
+   * (default: each one's own lease). Resolves with how many moved. A lapsed
+   * lease is not brought back. `rl.lease` does this in the background.
+   */
+  async heartbeat(sel: CloudSelector & { extendS?: number }): Promise<number> {
+    const body = selectorBody(sel);
+    if (sel.extendS !== undefined) {
+      checkLease('extendS', sel.extendS);
+      body.extend_s = sel.extendS;
+    }
+    const r = await this.cloud.request<{ extended?: number }>('POST', '/v1/sandboxes/heartbeat', body);
+    return r?.extended ?? 0;
+  }
+
+  /** Delete every matching sandbox (up to 1000 a call; `more` says to call again). Allowed while the org is frozen. */
+  async drain(sel: CloudSelector): Promise<CloudDrainResult> {
+    const r = await this.cloud.request<Partial<CloudDrainResult>>('POST', '/v1/sandboxes/drain', selectorBody(sel));
+    return { deleted: r?.deleted ?? 0, ids: r?.ids ?? [], failed: r?.failed ?? [], more: r?.more === true };
+  }
+
+  /** Grade a solved sandbox (an id or a `CloudSandbox`) in a sealed copy; see `CloudSandbox.grade`. */
+  grade(sandbox: string | CloudSandbox, cmd: string | string[], opts: CloudGradeOptions = {}): Promise<CloudGradeResult> {
+    const box = typeof sandbox === 'string' ? new CloudSandbox(this.cloud, { id: sandbox } as CloudSandboxInfo) : sandbox;
+    return box.grade(cmd, opts);
   }
 
   /** The org's sandboxes (one page); with all, deleted ones too. */
@@ -713,12 +1240,8 @@ export class CloudSandbox {
    */
   async exec(cmd: string | string[], opts: CloudExecOptions = {}): Promise<CloudExecResult> {
     const body = execBody(cmd, opts);
-    const r = await this.cloud.request<{ exit: number | null; stdout: string; stderr: string; woke_ms?: number }>(
-      'POST', this.path('/exec'), body, { signal: opts.signal },
-    );
-    const out: CloudExecResult = { exitCode: r.exit, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
-    if (typeof r.woke_ms === 'number') out.wokeMs = r.woke_ms;
-    return out;
+    const r = await this.cloud.request<Parameters<typeof execResult>[0]>('POST', this.path('/exec'), body, { signal: opts.signal });
+    return execResult(r);
   }
 
   /** Snapshot it and free its VM; it then costs only snapshot storage. */
@@ -740,6 +1263,77 @@ export class CloudSandbox {
 
   async delete(): Promise<void> {
     await this.cloud.request('DELETE', this.path());
+  }
+
+  /**
+   * Delete it, treating one that is gone already as done. `await using box =
+   * await cloud.sandboxes.create()` calls this when the block ends.
+   */
+  async dispose(): Promise<void> {
+    try {
+      await this.delete();
+    } catch (e) {
+      if (!(e instanceof Kosa8NotFoundError)) throw e;
+    }
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.dispose();
+  }
+
+  /**
+   * Push back its lease to now + `extendS` (default its own `lease_s`).
+   * Resolves with 1 when it moved, 0 when it is not leased or has lapsed.
+   */
+  heartbeat(opts: { extendS?: number } = {}): Promise<number> {
+    return this.cloud.sandboxes.heartbeat({ ids: [this.id], ...opts });
+  }
+
+  /**
+   * Grade its state with hidden tests, in a sealed copy: kosa8 Cloud forks
+   * one copy, takes all network away from it, writes `files` there (this
+   * sandbox never sees them), runs `cmd` and deletes the copy (unless
+   * `keep`). The reward is the last stdout line that is JSON with a numeric
+   * `reward` (`{"reward": 0.5, "metrics": {...}}`), else 1.0 on exit 0 and
+   * 0.0 otherwise; null with `failureClass` timeout or infra when the
+   * command did not finish, so a trainer masks it. With `runId` it is
+   * recorded as a rollout of that run.
+   */
+  async grade(cmd: string | string[], opts: CloudGradeOptions = {}): Promise<CloudGradeResult> {
+    const body: Json = { cmd: typeof cmd === 'string' ? ['sh', '-c', cmd] : cmd };
+    if (opts.files) {
+      const files: Record<string, string> = {};
+      for (const [p, v] of Object.entries(opts.files)) {
+        if (!p.startsWith('/')) throw new Kosa8Error(`a grader file path must be absolute, got ${p}`);
+        files[p] = b64(v);
+      }
+      if (Object.keys(files).length > 64) throw new Kosa8Error('at most 64 grader files');
+      body.files = files;
+    }
+    if (opts.timeoutS !== undefined) {
+      if (!(opts.timeoutS > 0 && opts.timeoutS <= 90)) throw new Kosa8Error('timeoutS must be more than 0 and at most 90');
+      body.timeout_s = opts.timeoutS;
+    }
+    const env = envList(opts.env);
+    if (env) body.env = env;
+    if (opts.keep) body.keep = true;
+    const runId = opts.runId ?? ambient(this.cloud).runId;
+    if (runId !== undefined) body.run_id = runId;
+    if (opts.rollout) body.rollout = opts.rollout;
+    const r = await this.cloud.request<Json>('POST', this.path('/grade'), body, {
+      idempotencyKey: opts.idempotencyKey ?? newIdempotencyKey(), signal: opts.signal,
+    });
+    return gradeResult(r ?? {});
+  }
+
+  /** Signed, expiring iframe URLs for its terminal or desktop. */
+  get embeds(): CloudEmbeds {
+    return new CloudEmbeds(this.cloud, this.path());
+  }
+
+  /** Its desktop recordings (made when it is deleted, for a sandbox created with `record: true`). */
+  async recordings(): Promise<CloudRecording[]> {
+    return (await this.cloud.request<{ recordings?: CloudRecording[] }>('GET', this.path('/recordings'))).recordings ?? [];
   }
 
   /**
@@ -812,17 +1406,29 @@ export class CloudSandbox {
   }
 
   /**
-   * Make `n` (1..100) copies of the sandbox as it is now, on its host; all
-   * or nothing.
+   * Make `n` (1..1000) copies of the sandbox as it is now, on its host. A
+   * plain `fork(n)` of at most 100 is all or nothing. Over 100, or with
+   * `labels`, `runId`, `leaseS` or `prefix`, it is partial unless
+   * `partialOk: false`: the copies made are returned and the rest are in
+   * `failed` (failure_class quota or infra). Inside an `rl.Run` the copies
+   * are the run's and leased. The answer is an array with `failed`,
+   * `requested` and `created`.
    *
    * Needs the host's data plane; on hosts without it the API answers 501
    * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`.
    * Not every kosa8 Cloud host has it yet.
    */
-  async fork(n = 1): Promise<CloudSandbox[]> {
-    checkInt('n', n, 1, MAX_FORK_N);
-    const r = await this.cloud.request<{ sandboxes?: CloudSandboxInfo[] }>('POST', this.path('/fork'), { n });
-    return (r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s));
+  async fork(n?: number | CloudForkOptions, opts: CloudForkOptions = {}): Promise<CloudSandboxBatch> {
+    const o: CloudForkOptions = typeof n === 'object' ? n : { ...opts, n: n ?? opts.n };
+    const count = o.n ?? 1;
+    checkInt('n', count, 1, MAX_FORK);
+    const amb = ambient(this.cloud);
+    const fan: CloudFanoutOptions = { ...o, runId: o.runId ?? amb.runId, leaseS: o.leaseS ?? amb.leaseS };
+    const body: Json = { n: count, ...fanoutBody(fan) };
+    const r = await this.cloud.request<{
+      sandboxes?: CloudSandboxInfo[]; failed?: CloudFanoutFailure[]; requested?: number; run_id?: string;
+    }>('POST', this.path('/fork'), body, { idempotencyKey: o.idempotencyKey ?? newIdempotencyKey() });
+    return toBatch((r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s)), r.failed ?? [], r.requested ?? count, r.run_id ?? fan.runId);
   }
 
   /**

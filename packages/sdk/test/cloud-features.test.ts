@@ -101,13 +101,11 @@ describe('sized and Docker creates', () => {
     expect(box.info.state).toBe('creating');
   }, 10_000);
 
-  it('makes a sandbox from a snapshot (id or object) and sets labels after', async () => {
-    const { cloud, seen } = cloudWith((s) =>
-      s.url.pathname.endsWith('/labels') ? [200, { id: 'sbx_1', labels: { team: 'ml' } }] : [201, { sandbox: info({ snapshot_id: snap.id }) }]);
+  it('makes a sandbox from a snapshot (id or object) with labels in the same create', async () => {
+    const { cloud, seen } = cloudWith(() => [201, { sandbox: info({ snapshot_id: snap.id, labels: { team: 'ml' } }) }]);
     const box = await cloud.sandboxes.create({ snapshot: snap, env: { A: '1' }, labels: { team: 'ml' } });
-    expect(seen[0]!.body).toEqual({ snapshot: 'snap_abcdefgh', env: { A: '1' } });
-    expect(route(seen[1]!)).toBe('PUT /v1/sandboxes/sbx_1/labels');
-    expect(seen[1]!.body).toEqual({ labels: { team: 'ml' } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toEqual({ snapshot: 'snap_abcdefgh', env: { A: '1' }, labels: { team: 'ml' } });
     expect(box.info.labels).toEqual({ team: 'ml' });
   });
 

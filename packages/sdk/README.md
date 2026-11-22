@@ -55,18 +55,23 @@ With no `template`, a sandbox starts from the org's default, `base`:
 
 | method | endpoint |
 | --- | --- |
-| `cloud.sandboxes.create({ template?, region?, sleepAfterS?, ttlS?, deleteAfter?, acceptPrice?, size?, cpus?, memMb?, image?, diskGb?, persistent?, docker?, cpu?, name?, env?, snapshot?, egress?, secrets?, labels?, wait? })` → `CloudSandbox` | `POST /v1/sandboxes` (waits for a cold boot unless `wait: false`) |
+| `cloud.sandboxes.create({ template?, region?, sleepAfterS?, ttlS?, deleteAfter?, leaseS?, runId?, acceptPrice?, size?, cpus?, memMb?, image?, diskGb?, persistent?, docker?, cpu?, name?, env?, snapshot?, egress?, secrets?, labels?, record?, idempotencyKey?, wait? })` → `CloudSandbox` | `POST /v1/sandboxes` (waits for a cold boot unless `wait: false`; sends an Idempotency-Key) |
+| `cloud.sandboxes.createMany(n, { …create fields, labels?, runId?, leaseS?, prefix?, partialOk?, wait? })` → `CloudSandboxBatch` | `POST /v1/sandboxes/batch` (1 to 1000) |
+| `cloud.sandboxes.heartbeat({ runId?, labels?, ids?, extendS? })` → number extended | `POST /v1/sandboxes/heartbeat` |
+| `cloud.sandboxes.drain({ runId?, labels?, ids? })` → `{ deleted, ids, failed, more }` | `POST /v1/sandboxes/drain` |
 | `cloud.sandboxes.list({ all?, limit?, cursor?, name?, labels? })` → `CloudSandbox[]` | `GET /v1/sandboxes` (`labels: { team: 'ml', gpu: true }` → `label=team=ml&label=gpu`) |
 | `cloud.sandboxes.listPage({ all?, limit?, cursor? })` → `{ sandboxes, nextCursor }` | `GET /v1/sandboxes` |
 | `cloud.sandboxes.iterate({ all?, limit? })` → async iterable of `CloudSandbox` | every page, following `nextCursor` |
 | `cloud.sandboxes.get(id)` → `CloudSandbox` | `GET /v1/sandboxes/{id}` |
 | `cloud.templates()` → `CloudTemplate[]` | `GET /v1/templates` |
-| `box.exec(cmd, { image?, env?, timeoutS?, signal? })` → `{ exitCode, stdout, stderr, wokeMs? }` | `POST …/exec` (a string runs through `sh -c`) |
+| `box.exec(cmd, { image?, env?, timeoutS?, signal? })` → `{ exitCode, stdout, stderr, wokeMs?, failureClass, retryable }` | `POST …/exec` (a string runs through `sh -c`) |
 | `box.execBackground(cmd, { image?, env?, timeoutS?, signal? })` → `CloudBackgroundExec` (`status()`, `wait()`, `stop()`) | `POST …/exec {background: true}` → 202; `GET …/exec/{bg_id}`; `POST …/exec/{bg_id}/stop` |
 | `box.getExec(bgId)` → `CloudBackgroundExec` | `GET …/exec/{bg_id}` |
 | `box.waitUntilRunning({ timeoutMs? })` | polls `GET` while `creating` |
 | `box.update({ ttlS?, deleteAfter?, sleepAfterS? })` → `{ sandbox, notes }` | `PATCH /v1/sandboxes/{id}`; `{ ttlS: null }` clears the lifetime |
 | `box.sleep()`, `box.wake()`, `box.refresh()`, `box.delete()` | `POST …/sleep`, `POST …/wake`, `GET`, `DELETE` |
+| `box.dispose()`, `await using box = …` | `DELETE` (a sandbox gone already is fine) |
+| `box.heartbeat({ extendS? })`, `box.grade(cmd, opts)` | see [RL training and fan-out](#rl-training-and-fan-out) |
 
 `ttlS` is seconds from now (60 to 7776000, 90 days); `deleteAfter` is a time (Unix ms or a `Date`). Give one or the other; both are checked before any request is made. `sleepAfterS` is idle seconds before the sandbox sleeps (0 to 604800; 0 never). `acceptPrice` is for a paid kosa8 Store item: its current price in USD, which the person agreed to. `box.info` is a `CloudSandboxInfo`: `state`, `template`, `source` (`pool`, `restore`, `cold` or `fork`), `parent_id`, `delete_after`, `sleep_after_s`, `host_unreachable`, `origin_item_version`, `region`, `own_host`, `cost_usd` and the rest of the API's Sandbox schema.
 
@@ -86,7 +91,7 @@ These need the host's data plane. On hosts without it the API answers 501 (`not_
 | `box.checkpoint(label?)` → `CloudCheckpoint` | `POST …/checkpoints` (the newest 10 are kept) |
 | `box.checkpoints()` → `CloudCheckpoint[]` | `GET …/checkpoints` (oldest first) |
 | `box.rewind(checkpointOrId)` → `{ checkpoint, backup, ms }` | `POST …/rewind` (the state before is saved as `backup`) |
-| `box.fork(n = 1)` → `CloudSandbox[]` | `POST …/fork` (1 to 100 copies, all or nothing) |
+| `box.fork(n = 1, { labels?, runId?, leaseS?, prefix?, partialOk? })` → `CloudSandboxBatch` | `POST …/fork` (1 to 1000 copies; a plain `fork(n)` of at most 100 is all or nothing, otherwise partial: the rest are in `failed`) |
 | `box.ports()` → `{ port, address, container, loopback }[]` | `GET …/ports` |
 
 ```ts
@@ -95,6 +100,62 @@ await box.exec('rm -rf /workspace/*');
 await box.rewind(cp);                 // /workspace is back
 const [copy] = await box.fork(1);     // a second sandbox, as this one is now
 ```
+
+### RL training and fan-out
+
+Thousands of rollouts that do not leak sandboxes, grade in sealed copies and mask what the platform got wrong.
+
+```ts
+import { Kosa8Cloud, rl } from '@kosa8/sdk';
+
+const cloud = new Kosa8Cloud();
+await rl.withRun(cloud, { name: 'grpo-7', project: 'swe' }, async (run) => {
+  const base = await cloud.sandboxes.create({ template: 'python' }); // set up once, fork per rollout
+  await base.exec('pip install -e /workspace/repo');
+  for (let step = 0; step < 100; step++) {
+    const results = await run.map(base, tasks, solve, {
+      gradeCmd: ['python', '/grader/test.py'], // with each task's hidden task.files
+      groupSize: 8, concurrency: 64,
+    });
+    trainer.step(results.groups(), results.mask); // masked (infra, quota, error) have reward null, never 0
+  }
+}); // records what is left, drains the run's sandboxes, marks it finished (or failed on a throw)
+```
+
+| method | endpoint |
+| --- | --- |
+| `rl.RlRun.start(cloud, { name, project?, config?, leaseS?, drainOnExit?, flushEvery?, signals?, heartbeatMs? })`, `rl.RlRun.attach(cloud, runId)`, `rl.withRun(cloud, opts, fn)`, `await using run = …` | `POST /v1/rl/runs`; while open, every sandbox the client makes is labelled `kosa8.run=<id>` and leased |
+| `run.map(base, tasks, solve, { gradeCmd?, files?, reward?, groupSize?, concurrency?, retries?, timeoutMs?, mask?, keep?, step?, signal? })` → `Rollouts` (`rewards`, `mask`, `meanReward`, `byClass`, `groups()`) | fork (or create) per rollout, `POST …/grade`, record, delete |
+| `run.record(rows)`, `run.flush()` | `POST /v1/rl/runs/{id}/rollouts` (batches of up to 500) |
+| `run.finish(status?)`, `run.summary()`, `run.update({ status?, name? })`, `run.rollouts(filters)`, `run.export()` (JSONL), `run.exportRows()`, `run.drain()`, `rl.RlRun.list(cloud, filters)` | `PATCH`, `GET /v1/rl/runs/{id}`, `GET …/rollouts`, `GET …/export`, `POST /v1/sandboxes/drain`, `GET /v1/rl/runs` |
+| `rl.lease(cloud, { runId? \| labels? \| ids?, leaseS?, intervalMs?, drain?, signals? })` → `Lease` (`beat()`, `close()`, `await using`) | `POST /v1/sandboxes/heartbeat` every leaseS / 3; `POST /v1/sandboxes/drain` on close, SIGINT, SIGTERM or when the event loop runs dry |
+| `rl.mapRollouts(solve, tasks, { base, cloud?, run?, … })` | the engine behind `run.map` |
+| `cloud.forkMap(base, fn, items, { concurrency?, retries?, timeoutMs?, labels?, runId?, leaseS?, signal? })` → `ForkResult[]` | `fn(child, item)` in its own fork per item; children always deleted |
+| `box.grade(cmd, { files?, timeoutS?, env?, keep?, runId?, rollout? })` → `{ reward, metrics, exitCode, failureClass, graderId, … }` | `POST …/grade`: a sealed copy with no network and the hidden files; `reward: null` when it did not finish |
+
+`base` is a `CloudSandbox` to fork, a `snap_…` id, create options, or `async (task) => sandbox`. A rollout's reward is the grader's (the last stdout line that is JSON with a numeric `reward`, else 1 for exit 0 and 0 otherwise), or `reward(sandbox, task, output)`, or what `solve` resolved with (a number or `{ reward }`). Infra failures and rate limits are retried on a fresh sandbox with backoff and jitter (a failed grade is retried on its own first).
+
+**Leases.** `leaseS` (60 to 86400) is a TTL that heartbeats move forward: a trainer that dies stops heartbeating and its sandboxes go `leaseS` later. A `Lease`'s timer is unref'd, so it never keeps the process up.
+
+**Idempotency.** Creates, batches, forks and grades send an `Idempotency-Key` (a fresh UUID per call, or yours as `idempotencyKey`), reused across that call's retries: a retried create never makes two.
+
+**Retries.** `new Kosa8Cloud({ retry })` takes a `RetryPolicy` (default `new RetryPolicy()`: 3 tries, full-jitter backoff from 500 ms up to 8 s, at least the Retry-After) or `false`. Reads, PUTs, deletes, heartbeats, drains and the idempotent creates are retried on infra failures; anything on a 429 that may pass. `callWithRetry(fn, policy)` is the same loop for your own code.
+
+**Failure classes.** Every error has `failureClass` (`timeout`, `infra`, `quota`, `client`, or `error` for one that is not the API's) and `retryable`, kosa8 Cloud's own when the answer had them; exec results have `failureClass` `ok`, `exit_nonzero` or `infra`. `classifyFailure(e)` classes anything thrown.
+
+### Org templates, small sizes, tokens, embeds, domains, recordings, Burst
+
+| method | endpoint |
+| --- | --- |
+| `cloud.orgTemplates.build({ name, image? \| dockerfile?, buildArgs?, setupCmd?, size?, cpus?, memMb?, region? })` | `POST /v1/templates` (202; then `create({ template: name })` restores its snapshot) |
+| `cloud.orgTemplates.import(images, { size?, setupCmd?, partialOk? })` | `POST /v1/templates/import` (up to 1000, e.g. RL task images by digest) |
+| `cloud.orgTemplates.get(idOrName)`, `.list()`, `.delete(idOrName)`, `.wait(idOrName)` | `GET /v1/templates/{id}`, `GET /v1/templates` (`org_templates`), `DELETE`, poll until ready |
+| `create({ size: '0.25x0.5' })` (`SMALL_CLOUD_SIZES`: 0.25x0.5, 0.5x1, 1x2), or `cpus: 0.25, memMb: 512` | small sizes for mostly idle fleets, bursting above their reserve |
+| `cloud.tokens.create({ scopes, sandboxIds?, labels?, ttlS?, name? })` → token with `secret`, `.list({ all? })`, `.revoke(id)` | `/v1/tokens`; a `k8c_tok_…` secret works as `apiKey` |
+| `box.embeds.create({ origins, mode?, ui?, ttlS?, command? })` → `{ url, snippet, … }`, `.list()`, `.revoke(id)` | `POST …/embed`, `GET …/embeds`, `DELETE …/embeds/{id}` |
+| `box.previews.domains(port)` or `cloud.previewDomains(previewId)`: `.add(hostname, { sslMethod? })`, `.list()`, `.get(hostname)`, `.remove(hostname)` | `…/previews/{port}/domains` |
+| `create({ record: true })`, `cloud.recordings.list({ sandboxId?, limit? })`, `.link(id, { ttlS? })`, `.delete(id)`, `box.recordings()` | `/v1/recordings`, `…/recordings` |
+| `cloud.burst.get()`, `cloud.burst.activate(quantity?)` | `GET`/`POST /v1/billing/burst` |
 
 ### Sized and Docker sandboxes, env, snapshots
 

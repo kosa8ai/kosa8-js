@@ -9,12 +9,13 @@
  */
 
 import { Kosa8Error, Kosa8TimeoutError } from './errors.js';
+import { CloudPreviewDomains } from './cloud-more.js';
 
 type Json = Record<string, unknown>;
 
 /** @internal What the resources here need from `Kosa8Cloud`. */
 export interface CloudRequester {
-  request<T = Json>(method: string, path: string, body?: unknown): Promise<T>;
+  request<T = Json>(method: string, path: string, body?: unknown, opts?: { idempotencyKey?: string; signal?: AbortSignal }): Promise<T>;
   requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array>;
 }
 
@@ -169,6 +170,8 @@ export class CloudSnapshots {
 
 /** A port of a sandbox at its own https URL. */
 export interface CloudPreview {
+  /** {sandbox_id}:{port}; `cloud.previewDomains(id)` takes it. */
+  id?: string;
   port: number;
   /** Public previews need no token. */
   public: boolean;
@@ -235,6 +238,11 @@ export class CloudPreviews {
   async delete(port: number): Promise<void> {
     checkPort(port);
     await this.cloud.request('DELETE', `${this.sandboxPath}/previews/${port}`);
+  }
+  /** The preview's custom domains: serve it at your own hostname. */
+  domains(port: number): CloudPreviewDomains {
+    checkPort(port);
+    return new CloudPreviewDomains(this.cloud, `${this.sandboxPath}/previews/${port}`);
   }
 }
 
