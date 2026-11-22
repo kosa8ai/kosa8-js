@@ -40,6 +40,7 @@ import {
   CloudRecordings,
   CloudTokens,
 } from './cloud-more.js';
+import { CloudJobs } from './jobs.js';
 import type { CloudRecording } from './cloud-more.js';
 import { forkMap } from './forkmap.js';
 import type { ForkMapOptions, ForkResult } from './forkmap.js';
@@ -725,6 +726,8 @@ export class Kosa8Cloud {
   readonly tokens: CloudTokens;
   /** Desktop session recordings. */
   readonly recordings: CloudRecordings;
+  /** Hosted jobs: kosa8 runs every task's rollout and grade server-side. */
+  readonly jobs: CloudJobs;
   /** The retry policy every request uses unless it says otherwise. */
   readonly retry: RetryPolicy;
   /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
@@ -755,6 +758,7 @@ export class Kosa8Cloud {
     this.burst = new CloudBurst(this);
     this.tokens = new CloudTokens(this);
     this.recordings = new CloudRecordings(this);
+    this.jobs = new CloudJobs(this);
     this.retry = toPolicy(options.retry);
   }
 

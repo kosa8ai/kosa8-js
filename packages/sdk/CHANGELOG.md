@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 (unreleased)
+
+- `cloud.jobs`: hosted jobs on kosa8 Cloud, as in the Python SDK. `submit` (tasks as a list or JSONL text, solver and sealed grader, grader files from bytes or text; sent with an Idempotency-Key), `get`, `list({ status, project, limit, cursor })`, `cancel`, `wait({ progress, pollMs, timeoutMs })` and `estimate` (ranges of sandbox-hours and list USD; `sample: n` pilot jobs, `sampleJobId`). Also `jobBody`, `loadJobTasks`, `encodeJobFiles`, `jobDone`, `JOB_DONE_STATES`. Needs the kosa8 Cloud `/v1/jobs` routes.
+
 ## 0.5.1
 
 - Failure class `oom`: exit 137 with the guest kernel's OOM count raised (kosa8 Cloud reports it on exec and grade; a grade killed for memory has no reward). It can be added to a rollout mask.

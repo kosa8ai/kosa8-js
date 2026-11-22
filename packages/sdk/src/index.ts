@@ -184,6 +184,21 @@ export type {
   CloudRecording,
   CloudRecordingList,
 } from './cloud-more.js';
+export { CloudJobs, JOB_DONE_STATES, MAX_JOB_TASKS, jobDone, jobBody, loadJobTasks, encodeJobFiles } from './jobs.js';
+export type {
+  CloudJob,
+  CloudJobStatus,
+  CloudJobCmd,
+  CloudJobFile,
+  CloudJobTask,
+  CloudJobCmdSpec,
+  CloudJobGraderSpec,
+  CloudJobOptions,
+  CloudJobEstimate,
+  CloudJobEstimateOptions,
+  CloudJobListOptions,
+  CloudJobWaitOptions,
+} from './jobs.js';
 export { Kosa8CancelledError, Kosa8ItemTimeoutError } from './forkmap.js';
 export type { ForkMapOptions, ForkResult } from './forkmap.js';
 export * as rl from './rl/index.js';
