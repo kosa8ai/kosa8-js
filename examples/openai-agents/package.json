@@ -1,0 +1,23 @@
+{
+  "name": "kosa8-example-openai-agents",
+  "private": true,
+  "type": "module",
+  "description": "An OpenAI Agents SDK agent whose tools run in a kosa8 Cloud sandbox.",
+  "scripts": {
+    "start": "tsx agent.ts",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kosa8/sdk": "0.5.2",
+    "@openai/agents": "0.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.20.3",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
