@@ -1,5 +1,14 @@
 # kosa8-js
 
+> **Switching from E2B / Daytona / Modal / Vercel Sandbox? Change one import.** Your code runs on kosa8 Cloud as it is; a call kosa8 cannot do throws `Unsupported` naming the kosa8 way. Guide: [kosa8.com/switch](https://kosa8.com/switch/)
+>
+> ```ts
+> import { Sandbox } from '@kosa8/sdk/e2b';         // was: from 'e2b'
+> import { Daytona } from '@kosa8/sdk/daytona';     // was: from '@daytonaio/sdk'
+> import { ModalClient } from '@kosa8/sdk/modal';   // was: from 'modal'
+> import { Sandbox } from '@kosa8/sdk/vercel';      // was: from '@vercel/sandbox'
+> ```
+
 TypeScript packages for [kosa8](https://kosa8.com), secure local infrastructure for AI agents: every agent gets its own sealed microVM, with the network closed except for an allow-list you write.
 
 | package | |
@@ -7,7 +16,30 @@ TypeScript packages for [kosa8](https://kosa8.com), secure local infrastructure 
 | [`@kosa8/sdk`](packages/sdk) | typed client for kosa8 Cloud (`Kosa8Cloud`, `https://api.kosa8.com`, an API key) and for the local daemon's native API over its unix socket (`Kosa8Client`): sandboxes, run and exec, files, checkpoint and rewind, fork, explore, snapshots |
 | [`@kosa8/ai-sdk-sandbox`](packages/ai-sdk-sandbox) | kosa8 sandbox for the Vercel AI SDK 7 (`experimental_sandbox`, `HarnessAgent`), on kosa8 Cloud or the local daemon |
 
-`Kosa8Cloud` and the kosa8 Cloud session of `@kosa8/ai-sdk-sandbox` need only an API key (`KOSA8_API_KEY`); see the [@kosa8/sdk README](packages/sdk#kosa8-cloud-quickstart). `Kosa8Client` and the local `@kosa8/ai-sdk-sandbox` session need kosa8 installed with its daemon running, on macOS (Apple silicon) or x86-64 Linux:
+## Start on kosa8 Cloud
+
+1. Sign up free at [app.kosa8.com](https://app.kosa8.com): the Starter plan, no card. Make an API key there.
+2. Install and run:
+
+```sh
+npm install @kosa8/sdk
+export KOSA8_API_KEY=k8c_live_...
+```
+
+```ts
+import { Kosa8Cloud } from '@kosa8/sdk';
+
+const cloud = new Kosa8Cloud(); // reads KOSA8_API_KEY; talks to https://api.kosa8.com
+const box = await cloud.sandboxes.create({ template: 'python', ttlS: 3600 });
+console.log((await box.exec('python3 -c "print(6 * 7)"')).stdout); // 42
+await box.delete();
+```
+
+More in the [@kosa8/sdk README](packages/sdk#kosa8-cloud-quickstart).
+
+## Run on your own machine
+
+`Kosa8Client` and the local `@kosa8/ai-sdk-sandbox` session use kosa8 installed with its daemon running, on macOS (Apple silicon) or x86-64 Linux:
 
 ```sh
 curl -fsSL https://kosa8.com/install.sh | sh
