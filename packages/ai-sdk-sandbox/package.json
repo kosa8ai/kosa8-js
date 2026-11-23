@@ -1,7 +1,7 @@
 {
   "name": "@kosa8/ai-sdk-sandbox",
   "version": "0.2.1",
-  "description": "kosa8 sandbox for the Vercel AI SDK 7: run an agent's commands and files in a microVM on kosa8 Cloud or on your own machine, with egress allow-lists.",
+  "description": "kosa8 (Zero Trust cybersecurity infrastructure for AI agents) sandbox for the Vercel AI SDK 7: run an agent's commands and files in a microVM on kosa8 Cloud or on your own machine, with egress allow-lists.",
   "license": "MIT",
   "author": "kosa8",
   "homepage": "https://kosa8.com",

@@ -1,6 +1,8 @@
 # kosa8-js
 
-> **Switching from E2B / Daytona / Modal / Vercel Sandbox? Change one import.** Your code runs on kosa8 Cloud as it is; a call kosa8 cannot do throws `Unsupported` naming the kosa8 way. Guide: [kosa8.com/switch](https://kosa8.com/switch/)
+**[kosa8](https://kosa8.com): Zero Trust cybersecurity infrastructure for AI agents.**
+
+> **Switching from E2B / Daytona / Modal / Vercel Sandbox? Change one import.** Your code runs on kosa8 Cloud as it is; a call kosa8 cannot do throws `Unsupported` naming the kosa8 way.
 >
 > ```ts
 > import { Sandbox } from '@kosa8/sdk/e2b';         // was: from 'e2b'
@@ -9,7 +11,7 @@
 > import { Sandbox } from '@kosa8/sdk/vercel';      // was: from '@vercel/sandbox'
 > ```
 
-TypeScript packages for [kosa8](https://kosa8.com), secure local infrastructure for AI agents: every agent gets its own sealed microVM, with the network closed except for an allow-list you write.
+TypeScript packages for [kosa8](https://kosa8.com), Zero Trust cybersecurity infrastructure for AI agents: every agent gets its own sealed microVM, with the network closed except for an allow-list you write.
 
 | package | |
 | --- | --- |

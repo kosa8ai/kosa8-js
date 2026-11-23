@@ -1,5 +1,7 @@
 # @kosa8/ai-sdk-sandbox
 
+**[kosa8](https://kosa8.com): Zero Trust cybersecurity infrastructure for AI agents.**
+
 A [kosa8](https://kosa8.com) sandbox for the [Vercel AI SDK 7](https://ai-sdk.dev). Your agent's commands and files run in a microVM with its own kernel, and its network is closed except for the hosts you allow. Run it on **kosa8 Cloud** with an API key, or on your own machine with the kosa8 daemon. Use it with `HarnessAgent`, or hand a session to AI SDK tools as `experimental_sandbox`.
 
 It implements the AI SDK 7 sandbox interfaces (`Experimental_SandboxSession`, `HarnessV1NetworkSandboxSession`, `HarnessV1SandboxProvider`) in the same shape as `@ai-sdk/sandbox-vercel` and `@e2b/ai-sdk-sandbox`. It is built on [`@kosa8/sdk`](https://www.npmjs.com/package/@kosa8/sdk).

@@ -1,6 +1,8 @@
 # @kosa8/sdk
 
-> **Switching from E2B / Daytona / Modal / Vercel Sandbox? Change one import.** Your code runs on kosa8 Cloud as it is; a call kosa8 cannot do throws `Unsupported` naming the kosa8 way. Guide: [kosa8.com/switch](https://kosa8.com/switch/)
+**[kosa8](https://kosa8.com): Zero Trust cybersecurity infrastructure for AI agents.**
+
+> **Switching from E2B / Daytona / Modal / Vercel Sandbox? Change one import.** Your code runs on kosa8 Cloud as it is; a call kosa8 cannot do throws `Unsupported` naming the kosa8 way.
 >
 > ```ts
 > import { Sandbox } from '@kosa8/sdk/e2b';         // was: from 'e2b'
