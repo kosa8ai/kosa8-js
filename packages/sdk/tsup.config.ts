@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts', 'compat/e2b': 'src/compat/e2b.ts' },
+  entry: { index: 'src/index.ts', 'compat/e2b': 'src/compat/e2b.ts', 'compat/daytona': 'src/compat/daytona.ts', 'compat/modal': 'src/compat/modal.ts', 'compat/vercel': 'src/compat/vercel.ts' },
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,

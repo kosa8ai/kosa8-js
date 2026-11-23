@@ -1,5 +1,14 @@
 # @kosa8/sdk
 
+> **Switching from E2B / Daytona / Modal / Vercel Sandbox? Change one import.** Your code runs on kosa8 Cloud as it is; a call kosa8 cannot do throws `Unsupported` naming the kosa8 way. Guide: [kosa8.com/switch](https://kosa8.com/switch/)
+>
+> ```ts
+> import { Sandbox } from '@kosa8/sdk/e2b';         // was: from 'e2b'
+> import { Daytona } from '@kosa8/sdk/daytona';     // was: from '@daytonaio/sdk'
+> import { ModalClient } from '@kosa8/sdk/modal';   // was: from 'modal'
+> import { Sandbox } from '@kosa8/sdk/vercel';      // was: from '@vercel/sandbox'
+> ```
+
 Typed TypeScript client for [kosa8](https://kosa8.com). kosa8 gives every AI agent its own sealed machine. This package talks to both places those machines run:
 
 - **kosa8 Cloud** (`Kosa8Cloud`): sandboxes on kosa8's hosts, over HTTPS at `https://api.kosa8.com`, with an API key. Nothing to install.
@@ -9,9 +18,11 @@ No runtime dependencies. ESM and CommonJS builds with `.d.ts` types. Node 18 or 
 
 ## kosa8 Cloud quickstart
 
+Sign up free at [app.kosa8.com](https://app.kosa8.com) (the Starter plan, no card) and make an API key, then:
+
 ```sh
 npm install @kosa8/sdk
-export KOSA8_API_KEY=k8c_live_...   # make one at https://app.kosa8.com
+export KOSA8_API_KEY=k8c_live_...
 ```
 
 ```ts
@@ -378,6 +389,42 @@ await sbx.kill();
 It covers `Sandbox.create(template?, { timeoutMs, envs, metadata, allowInternetAccess, apiKey })`, `Sandbox.connect(id)`, `Sandbox.kill(id)`, `sandbox.sandboxId`, `kill()`, `setTimeout`, `getInfo`, `isRunning`, `pause`, `getHost`; `commands.run(cmd, { onStdout, onStderr, timeoutMs, envs, cwd, background })`, `commands.connect` / `kill`, the `CommandHandle` (`pid`, `wait({ onStdout })`, `kill()`); `files.read` / `write` / `list` / `exists` / `remove` / `makeDir` / `rename`. Anything else throws `Unsupported` (naming the kosa8 way), and errors come back as E2B's (`TimeoutError`, `NotFoundError`, `CommandExitError`, …) with the kosa8 error as `cause`. `sandbox.kosa8` is the `CloudSandbox` underneath.
 
 What streams: `commands.run` with `onStdout` / `onStderr`, or a `timeoutMs` over 90 s (or 0, no limit), is a streamed exec: callbacks fire as the command prints and it is not held to 90 s. A plain `commands.run` is buffered (90 s at most, output when it ends). A background command's output is polled about once a second (`CommandHandle.pollIntervalMs`) and passed to `onStdout` as it appears, stdout and stderr together. Only `/workspace` outlives a command unless the sandbox is persistent; relative paths are under `/workspace`. No stdin or PTY.
+
+### Daytona, Modal and Vercel Sandbox shims
+
+The same one-import swap for three more SDKs. Each reads `KOSA8_API_KEY` (or the provider's own variable, `DAYTONA_API_KEY`, `MODAL_TOKEN_SECRET`, `VERCEL_TOKEN` / `VERCEL_OIDC_TOKEN`, only when it holds a kosa8 `k8c_` key; another provider's key is never sent anywhere). Sandboxes are created **persistent** (one long-lived container, like the VMs those SDKs give: installs, `$HOME` and background processes last between commands); when your plan has no persistent sandbox left, or the host cannot run one for that image, the shim warns and makes a plain one. Relative paths are under `/workspace`. A call kosa8 cannot do throws `Unsupported`, naming the kosa8 way; `.kosa8` on a sandbox is the `CloudSandbox` underneath.
+
+```ts
+import { Daytona } from '@kosa8/sdk/daytona'; // was: from '@daytonaio/sdk'
+const daytona = new Daytona();
+const sb = await daytona.create({ language: 'python', envVars: { A: '1' } });
+console.log((await sb.process.executeCommand('python3 -c "print(6*7)"')).result);
+console.log((await sb.getPreviewLink(3000)).url);
+await sb.delete();
+```
+
+```ts
+import { ModalClient } from '@kosa8/sdk/modal'; // was: from 'modal'
+const modal = new ModalClient();
+const app = await modal.apps.fromName('my-app', { createIfMissing: true });
+const sb = await modal.sandboxes.create(app, modal.images.fromRegistry('python:3.12-slim'), { encryptedPorts: [8000] });
+const p = await sb.exec(['python3', '-c', 'print(1)']);
+console.log(await p.stdout.readText(), await p.wait());
+console.log((await sb.tunnels())[8000].url);
+await sb.terminate();
+```
+
+```ts
+import { Sandbox } from '@kosa8/sdk/vercel'; // was: from '@vercel/sandbox'
+const sb = await Sandbox.create({ ports: [3000], source: { type: 'git', url: 'https://github.com/your-org/your-app.git' } });
+const r = await sb.runCommand('node', ['--version']);
+console.log(await r.stdout(), sb.domain(3000));
+await sb.delete();
+```
+
+- **Daytona** (`@daytonaio/sdk` 0.233): `create` (language, `snapshot` as a kosa8 template or `snap_…`, registry `image`, `envVars`, `labels`, `public`, `autoStopInterval`, `ttlMinutes`, `ephemeral`, `resources` cpu/memory/disk, `networkBlockAll` / `networkAllowList` / `domainAllowList`), `get` / `list` / `start` / `stop` / `delete` / `fork`; `process.executeCommand`, `codeRun` (python, javascript), sessions (`createSession`, `executeSessionCommand` incl. `runAsync`, `getSessionCommand`, `getSessionCommandLogs`; a session keeps its working folder and exported variables between commands); `fs` upload, download, list, details, folders, delete, move, permissions; `getPreviewLink`, `getSignedPreviewUrl`, `setLabels`, `setAutostopInterval`, `setTtl`, `updateNetworkSettings`, `createSnapshot`, `downloadUrl` / `uploadUrl`. Unsupported: declarative `Image` builds, volumes, GPUs, `user`, PTY, `git`, `computerUse`, `codeInterpreter`, LSP, SSH, `updateEnv`, `findFiles` / `searchFiles` / `replaceInFiles`, file streams, `archive`, `resize`, metrics, `jwtToken`.
+- **Modal** (`modal` 0.11): `ModalClient`, `apps.fromName` (an app is the label `modal.app`), `images.fromRegistry` (a registry image, or a kosa8 template key such as `python`), `images.fromId` (a snapshot), `sandboxes.create` (`timeoutMs`, `idleTimeoutMs`, `workdir`, `command` entrypoint, `env`, `cpu` / `memoryMiB`, `encryptedPorts` / `unencryptedPorts`, `blockNetwork`, outbound allow-lists, `name`, `tags`), `fromId` / `fromName` / `list`; `exec` (streams to `stdout` / `stderr`, `readText()`, `wait()`, text or binary), `terminate`, `wait` / `poll` / `stdout` for an entrypoint, `tunnels`, `filesystem` (read, write, list, mkdir, remove, stat, copy to and from local), `setTags` / `getTags`, `updateNetworkPolicy`, `snapshotFilesystem`, `experimentalPause` / `Resume`; the older `App.lookup` + `app.createSandbox` style too. Unsupported: `dockerfileCommands` and image builds, registry secrets, secrets, volumes, bucket mounts, GPUs, PTY, stdin, `h2Ports`, inbound allow-lists, readiness probes, custom domains, several regions, `sandbox.logs`, `filesystem.watch`, functions.
+- **Vercel Sandbox** (`@vercel/sandbox` 4.1): `Sandbox.create` (`source` git / tarball / a kosa8 `snap_` snapshot, `ports`, `timeout`, `resources.vcpus` at 2 GiB each, `runtime` node/python, `image`, `env`, `tags`, `networkPolicy` allow-all / deny-all / host and subnet lists, `persistent`), `Sandbox.get` / `list`; `runCommand` (both forms, `cwd`, `env`, `sudo`, `stdout` / `stderr` writables, `timeoutMs`; `detached` gives a `Command` with `logs()`, `wait()`, `kill()`), `getCommand`, `writeFiles`, `readFile`, `readFileToBuffer`, `downloadFile`, `mkDir`, `domain(port)`, `stop` (sleeps it, memory and disk kept), `delete`, `extendTimeout`, `update`, `updateNetworkPolicy`, `snapshot`, `openInteractive`. Unsupported: network rules with request transforms, `mounts`, `networkId`, `credentials`, regions, `keepLastSnapshots`, stdin, users and groups (`asUser`, `createUser`), `Sandbox.fork`, `sandbox.fs`.
 
 ## The same thing in each language
 

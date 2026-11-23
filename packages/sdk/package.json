@@ -24,7 +24,11 @@
     "checkpoint",
     "fork",
     "egress",
-    "sdk"
+    "sdk",
+    "e2b",
+    "daytona",
+    "modal",
+    "vercel-sandbox"
   ],
   "type": "module",
   "main": "./dist/index.cjs",
@@ -49,6 +53,36 @@
       "require": {
         "types": "./dist/compat/e2b.d.cts",
         "default": "./dist/compat/e2b.cjs"
+      }
+    },
+    "./daytona": {
+      "import": {
+        "types": "./dist/compat/daytona.d.ts",
+        "default": "./dist/compat/daytona.js"
+      },
+      "require": {
+        "types": "./dist/compat/daytona.d.cts",
+        "default": "./dist/compat/daytona.cjs"
+      }
+    },
+    "./modal": {
+      "import": {
+        "types": "./dist/compat/modal.d.ts",
+        "default": "./dist/compat/modal.js"
+      },
+      "require": {
+        "types": "./dist/compat/modal.d.cts",
+        "default": "./dist/compat/modal.cjs"
+      }
+    },
+    "./vercel": {
+      "import": {
+        "types": "./dist/compat/vercel.d.ts",
+        "default": "./dist/compat/vercel.js"
+      },
+      "require": {
+        "types": "./dist/compat/vercel.d.cts",
+        "default": "./dist/compat/vercel.cjs"
       }
     },
     "./package.json": "./package.json"
