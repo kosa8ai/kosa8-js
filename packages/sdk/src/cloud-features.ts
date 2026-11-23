@@ -15,7 +15,7 @@ type Json = Record<string, unknown>;
 
 /** @internal What the resources here need from `Kosa8Cloud`. */
 export interface CloudRequester {
-  request<T = Json>(method: string, path: string, body?: unknown, opts?: { idempotencyKey?: string; signal?: AbortSignal }): Promise<T>;
+  request<T = Json>(method: string, path: string, body?: unknown, opts?: { idempotencyKey?: string; autoIdempotencyKey?: boolean; signal?: AbortSignal }): Promise<T>;
   requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array>;
 }
 

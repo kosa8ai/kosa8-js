@@ -57,7 +57,8 @@ describe('retries', () => {
     const c = mockCloud(() => [502, { error: 'host_failed', message: 'host failed' }], FAST);
     await expect(c.cloud.sandboxes.create({ wait: false })).rejects.toThrow();
     expect(c.seen).toHaveLength(3);
-    expect(new Set(c.seen.map((x) => x.headers['Idempotency-Key'])).size).toBe(1);
+    // The SDK's own key is renewed after each 5xx: every retry is a new attempt.
+    expect(new Set(c.seen.map((x) => x.headers['Idempotency-Key'])).size).toBe(3);
     const g = mockCloud(() => [502, { error: 'host_failed', message: 'host failed' }], FAST);
     await expect(g.cloud.limits()).rejects.toThrow();
     expect(g.seen).toHaveLength(3);

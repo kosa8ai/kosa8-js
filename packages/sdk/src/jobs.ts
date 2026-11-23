@@ -21,7 +21,7 @@
 
 import { Kosa8Error, Kosa8TimeoutError } from './errors.js';
 import type { CloudRequester } from './cloud-features.js';
-import { newIdempotencyKey } from './cloud.js';
+import { idemOpts } from './cloud.js';
 
 type Json = Record<string, unknown>;
 const enc = encodeURIComponent;
@@ -284,8 +284,7 @@ export class CloudJobs {
    */
   async submit(opts: CloudJobOptions & { idempotencyKey?: string }): Promise<CloudJob> {
     const { idempotencyKey, ...o } = opts;
-    const key = idempotencyKey ?? newIdempotencyKey();
-    return jobOf(await this.cloud.request('POST', '/v1/jobs', jobBody(o), { idempotencyKey: key }));
+    return jobOf(await this.cloud.request('POST', '/v1/jobs', jobBody(o), idemOpts(idempotencyKey)));
   }
 
   /** The job now: `status`, `counts`, `by_failure_class`, `progress`, `cost_usd`, `eta_s`. */

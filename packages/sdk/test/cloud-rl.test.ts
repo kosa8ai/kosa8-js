@@ -45,6 +45,54 @@ describe('Idempotency-Key', () => {
     expect(seen[1]!.headers['Idempotency-Key']).toBe('my-key-1');
   });
 
+  it('renews its own key after a 5xx, so each retry of a server-side failure is a new attempt', async () => {
+    const { cloud, seen } = mockCloud((_s, n) =>
+      n === 0 ? [502, { error: 'host_failed', message: 'boot failed', failure_class: 'infra', retryable: true }] : [201, { sandbox: info() }]);
+    await cloud.sandboxes.create();
+    expect(seen).toHaveLength(2);
+    const [k0, k1] = seen.map((s) => s.headers['Idempotency-Key']);
+    expect(k0).toMatch(UUID_RE);
+    expect(k1).toMatch(UUID_RE);
+    expect(k1).not.toBe(k0);
+  });
+
+  it('renews it on a 503 too, waiting its Retry-After', async () => {
+    const { cloud, seen } = mockCloud((_s, n) =>
+      n === 0 ? [503, { error: 'host_restarting', message: 'restarting' }, { 'Retry-After': '0' }] : [200, { sandboxes: [info()], failed: [], requested: 1, created: 1 }]);
+    await cloud.sandboxes.createMany(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]!.headers['Idempotency-Key']).not.toBe(seen[0]!.headers['Idempotency-Key']);
+  });
+
+  it('keeps its own key after no answer (the first try may have created it)', async () => {
+    const { cloud, seen } = mockCloud((_s, n) => {
+      if (n === 0) throw new TypeError('fetch failed: connection reset');
+      return [201, { sandbox: info() }];
+    });
+    await cloud.sandboxes.create();
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!.headers['Idempotency-Key']).toMatch(UUID_RE);
+    expect(seen[1]!.headers['Idempotency-Key']).toBe(seen[0]!.headers['Idempotency-Key']);
+  });
+
+  it('keeps its own key after a 429 and a 409 idempotency_in_progress', async () => {
+    const { cloud, seen } = mockCloud((_s, n) => {
+      if (n === 0) return [429, { error: 'rate_limited', message: 'slow down' }, { 'Retry-After': '0' }];
+      if (n === 1) return [409, { error: 'idempotency_in_progress', message: 'still running' }];
+      return [201, { sandbox: info() }];
+    });
+    await cloud.sandboxes.create();
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen.map((s) => s.headers['Idempotency-Key'])).size).toBe(1);
+  });
+
+  it('never changes the caller’s key, even after a 502', async () => {
+    const { cloud, seen } = mockCloud((_s, n) =>
+      n === 0 ? [502, { error: 'host_failed', message: 'boot failed', failure_class: 'infra', retryable: true }] : [201, { sandbox: info() }]);
+    await cloud.sandboxes.create({ idempotencyKey: 'caller-key' });
+    expect(seen.map((s) => s.headers['Idempotency-Key'])).toEqual(['caller-key', 'caller-key']);
+  });
+
   it('is not sent on other calls', async () => {
     const { cloud, seen } = mockCloud(() => [200, { org: {} }]);
     await cloud.me();

@@ -32,6 +32,16 @@ describe('hosted jobs', () => {
     expect(seen[1]!.headers['Idempotency-Key']).toBe('mine');
   });
 
+  it('submit renews its own key after a 5xx, never the caller’s', async () => {
+    const { cloud, seen } = mockCloud((_s, n) =>
+      n % 2 === 0 ? [502, { error: 'host_failed', message: 'down' }] : [202, { job_id: 'job_1', job: { status: 'queued' } }]);
+    await cloud.jobs.submit(OPTS);
+    expect(seen[1]!.headers['Idempotency-Key']).not.toBe(seen[0]!.headers['Idempotency-Key']);
+    await cloud.jobs.submit({ ...OPTS, idempotencyKey: 'mine' });
+    expect(seen[2]!.headers['Idempotency-Key']).toBe('mine');
+    expect(seen[3]!.headers['Idempotency-Key']).toBe('mine');
+  });
+
   it('takes JSONL text, keeping its base64 files, and plain commands', () => {
     const body = jobBody({
       name: 'e', image: 'ghcr.io/x/y', tasks: '{"id":"a","files":{"/x":"aGk="}}\n\n{"id":"b"}\n',
