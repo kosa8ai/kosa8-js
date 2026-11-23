@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-11-23
 
 - Retries of creates, batches, forks, grades and job submits use a new SDK-made `Idempotency-Key` after a 5xx (502 `host_failed`, 503 `no_capacity` / `host_restarting` / `host_unavailable`, 504), so each retry of a server-side failure is a new attempt. The key is still kept after no answer (the first try may have created the sandbox), a 429 and a 409 `idempotency_in_progress` / `template_building`. A key you pass as `idempotencyKey` is never changed. Retry-After is honoured as before.
 - `@kosa8/sdk/daytona`, `@kosa8/sdk/modal` and `@kosa8/sdk/vercel`: one-import shims for Daytona's `@daytonaio/sdk` (0.233), Modal's `modal` (0.11) and `@vercel/sandbox` (4.1) on kosa8 Cloud. Sandboxes are created persistent (falling back to a plain one, with a warning, when the plan or host cannot); the key comes from `KOSA8_API_KEY` or the provider's own variable when it holds a `k8c_` key; previews back Daytona preview links, Modal tunnels and Vercel `domain(port)`; network policies map to egress; Daytona sessions keep `cd` and `export` between commands. Calls kosa8 cannot do throw `Unsupported` with the kosa8 alternative.
