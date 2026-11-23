@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fork progress: `box.fork(n, { onProgress })` streams the fork (`Accept: application/x-ndjson`) and calls `onProgress({ requested, created, failed })` when the copies start and after each host call (up to 100 copies each); the answer is the same `CloudSandboxBatch`. An API that does not stream answers as before. `CloudForkProgress` is exported.
 - Streamed exec: `box.execStream(cmd, { env, image, timeoutS, signal })` returns a `CloudExecStream`, an async iterable of `{ stream, text }` pieces as the command prints (`result({ onStdout, onStderr })`, `exitCode`, `stdout`, `stderr`, `close()`). `box.exec(cmd, { onStdout, onStderr, stream })` streams when given callbacks, `stream: true` or a `timeoutS` over 90. A streamed exec is not held to the 90 s buffered limit. `EXEC_LIMIT_S` is exported.
 - `@kosa8/sdk/e2b`: an E2B-compatible `Sandbox` (`create`, `connect`, `kill`, `sandboxId`, `setTimeout`, `getInfo`, `isRunning`, `pause`, `getHost`, `commands.run` with `onStdout` / `onStderr` / `timeoutMs` / `envs` / `cwd` / `background`, `commands.connect` / `kill`, `files.read` / `write` / `list` / `exists` / `remove` / `makeDir` / `rename`), with E2B's error classes and `Unsupported` for the rest. Callbacks stream; background output is polled about once a second.
 

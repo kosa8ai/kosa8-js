@@ -113,6 +113,7 @@ export type {
   CloudFanoutOptions,
   CloudBatchOptions,
   CloudForkOptions,
+  CloudForkProgress,
   CloudFanoutFailure,
   CloudSandboxBatch,
   CloudSelector,

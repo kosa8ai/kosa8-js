@@ -295,6 +295,20 @@ export interface CloudBatchOptions
 export interface CloudForkOptions extends CloudFanoutOptions {
   /** How many copies, 1..1000. Default 1. Over 100, or with any other option, the fork is partial unless `partialOk: false`. */
   n?: number;
+  /**
+   * Called as the copies are made: once when they start, then after each
+   * host call (up to 100 copies each, so the count moves 100 at a time).
+   * The fork is then streamed (`Accept: application/x-ndjson`); its answer
+   * is the same.
+   */
+  onProgress?: (p: CloudForkProgress) => void;
+}
+
+/** One fork progress event: of `requested`, how many are made and how many failed so far. */
+export interface CloudForkProgress {
+  requested: number;
+  created: number;
+  failed: number;
 }
 
 /** One sandbox a batch or fork did not make. */
@@ -1154,15 +1168,17 @@ export class Kosa8Cloud {
    * starts throws the usual typed error (a 429 is retried); nothing is
    * retried once output flows.
    */
-  requestStream(method: string, path: string, body: unknown, opts: { signal?: AbortSignal } = {}): Promise<Response> {
-    return callWithRetry(() => this.requestStreamOnce(method, path, body, opts.signal), this.retry, {
+  requestStream(method: string, path: string, body: unknown, opts: { signal?: AbortSignal; idempotencyKey?: string } = {}): Promise<Response> {
+    const idem = opts.idempotencyKey !== undefined;
+    return callWithRetry(() => this.requestStreamOnce(method, path, body, opts.signal, opts.idempotencyKey), this.retry, {
       signal: opts.signal,
-      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && retrySafe(method, path, false, e),
+      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && retrySafe(method, path, idem, e),
     });
   }
 
-  private async requestStreamOnce(method: string, path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
-    const resp = await this.send(method, path, { json: body }, 'application/x-ndjson, application/json', signal);
+  private async requestStreamOnce(method: string, path: string, body: unknown, signal?: AbortSignal, idempotencyKey?: string): Promise<Response> {
+    const extra: Record<string, string> = idempotencyKey !== undefined ? { 'Idempotency-Key': idempotencyKey } : {};
+    const resp = await this.send(method, path, { json: body }, 'application/x-ndjson, application/json', signal, extra);
     if (!resp.ok) {
       const text = await resp.text();
       let data: unknown = text;
@@ -1820,10 +1836,62 @@ export class CloudSandbox {
     const amb = ambient(this.cloud);
     const fan: CloudFanoutOptions = { ...o, runId: o.runId ?? amb.runId, leaseS: o.leaseS ?? amb.leaseS };
     const body: Json = { n: count, ...fanoutBody(fan) };
-    const r = await this.cloud.request<{
-      sandboxes?: CloudSandboxInfo[]; failed?: CloudFanoutFailure[]; requested?: number; run_id?: string;
-    }>('POST', this.path('/fork'), body, { idempotencyKey: o.idempotencyKey ?? newIdempotencyKey() });
+    type ForkAnswer = { sandboxes?: CloudSandboxInfo[]; failed?: CloudFanoutFailure[]; requested?: number; run_id?: string };
+    const idempotencyKey = o.idempotencyKey ?? newIdempotencyKey();
+    const r = o.onProgress
+      ? await this.forkStreamed<ForkAnswer>(body, idempotencyKey, o.onProgress)
+      : await this.cloud.request<ForkAnswer>('POST', this.path('/fork'), body, { idempotencyKey });
     return toBatch((r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s)), r.failed ?? [], r.requested ?? count, r.run_id ?? fan.runId);
+  }
+
+  /**
+   * One fork with its progress streamed: each progress line goes to
+   * onProgress, the last line is the answer (thrown as the usual typed
+   * error when it is one). An API that does not stream answers plain JSON,
+   * returned as it is.
+   */
+  private async forkStreamed<T>(body: Json, idempotencyKey: string, onProgress: (p: CloudForkProgress) => void): Promise<T> {
+    const path = this.path('/fork');
+    const resp = await this.cloud.requestStream('POST', path, body, { idempotencyKey });
+    const text = new TextDecoder();
+    let buf = '';
+    const handle = (line: string): { done: true; value: T } | null => {
+      const ev = JSON.parse(line) as Json;
+      if (ev.event === 'progress') {
+        onProgress({ requested: Number(ev.requested ?? 0), created: Number(ev.created ?? 0), failed: Number(ev.failed ?? 0) });
+        return null;
+      }
+      if (ev.event === 'result') {
+        const { event: _e, status, ...rest } = ev;
+        const st = Number(status ?? 200);
+        if (st >= 400) throw cloudError(new Response(null, { status: st }), rest, { method: 'POST', path });
+        return { done: true, value: rest as T };
+      }
+      return { done: true, value: ev as T }; // a plain answer
+    };
+    const reader = resp.body?.getReader();
+    if (reader) {
+      try {
+        for (;;) {
+          const r = await reader.read();
+          if (r.done) break;
+          buf += text.decode(r.value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            const out = line === '' ? null : handle(line);
+            if (out) return out.value;
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const rest = (buf + text.decode()).trim();
+    const out = rest === '' ? null : handle(rest);
+    if (out) return out.value;
+    throw new Kosa8ConnectionError("the connection to kosa8 Cloud closed before the fork's answer", { method: 'POST', path });
   }
 
   /**
