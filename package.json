@@ -1,7 +1,7 @@
 {
   "name": "kosa8-js",
   "private": true,
-  "description": "TypeScript packages for kosa8: @kosa8/sdk and @kosa8/ai-sdk-sandbox",
+  "description": "TypeScript packages for kosa8, Zero Trust cybersecurity infrastructure for AI agents: @kosa8/sdk and @kosa8/ai-sdk-sandbox",
   "license": "MIT",
   "workspaces": [
     "packages/sdk",
