@@ -255,8 +255,11 @@ export interface CloudCreateOptions {
    */
   aiGateway?: boolean;
   /**
-   * The Idempotency-Key header. Default: a fresh UUID per call, reused
-   * across that call's retries, so a retried create never makes two.
+   * The Idempotency-Key header, sent as given on every retry. Default: a
+   * fresh UUID per call, reused across retries after no answer, a 429 or a
+   * 409 (so a retried create never makes two) and replaced by a new one
+   * after a 5xx (the server keeps no failed answer, and each retry of a
+   * server-side failure is a new attempt).
    */
   idempotencyKey?: string;
   /** Wait until a cold-booting (202 creating) sandbox is running. Default true. */
@@ -277,7 +280,7 @@ export interface CloudFanoutOptions {
   prefix?: string;
   /** true: make what fits and list the rest in `failed`; false: all or nothing. */
   partialOk?: boolean;
-  /** The Idempotency-Key header (default a fresh UUID, reused across retries). */
+  /** The Idempotency-Key header (default a fresh UUID, renewed after a 5xx; yours is never changed). */
   idempotencyKey?: string;
 }
 
@@ -369,7 +372,7 @@ export interface CloudGradeOptions {
   runId?: string;
   /** The rollout's place in the run. */
   rollout?: { step?: number; group?: string | number; index?: number; meta?: Record<string, unknown> };
-  /** The Idempotency-Key header (default a fresh UUID, reused across retries). */
+  /** The Idempotency-Key header (default a fresh UUID, renewed after a 5xx; yours is never changed). */
   idempotencyKey?: string;
   signal?: AbortSignal;
 }
@@ -705,8 +708,45 @@ export interface CloudRequestOptions {
   signal?: AbortSignal;
   /** Send this Idempotency-Key (and so retry a POST on infra failures too). */
   idempotencyKey?: string;
+  /**
+   * Send an Idempotency-Key the SDK makes (when `idempotencyKey` is not
+   * given): kept across retries after no answer, a 429 or a 409, and
+   * replaced by a new one after a 5xx, so each retry of a server-side
+   * failure is a new attempt.
+   */
+  autoIdempotencyKey?: boolean;
   /** This call's retry policy instead of the client's. */
   retry?: RetryPolicy;
+}
+
+/** @internal The caller's key (never changed), else one the SDK makes and may renew. */
+export function idemOpts(key: string | undefined): Pick<CloudRequestOptions, 'idempotencyKey' | 'autoIdempotencyKey'> {
+  return key !== undefined ? { idempotencyKey: key } : { autoIdempotencyKey: true };
+}
+
+/**
+ * @internal Whether a retry after `e` gets a new SDK-made Idempotency-Key:
+ * only when the server answered with a 5xx. No answer (the first try may
+ * still be running), a 429 or a 409 keep the key.
+ */
+export function renewsIdempotencyKey(e: unknown): boolean {
+  return e instanceof Kosa8Error && typeof e.status === 'number' && e.status >= 500;
+}
+
+/**
+ * @internal The Idempotency-Key for each try of one call: the caller's
+ * always, or one the SDK makes, renewed after a server-side failure.
+ */
+function idemKeys(opts: { idempotencyKey?: string; autoIdempotencyKey?: boolean }) {
+  const auto = opts.idempotencyKey === undefined && opts.autoIdempotencyKey === true;
+  let key = opts.idempotencyKey ?? (auto ? newIdempotencyKey() : undefined);
+  return {
+    sent: key !== undefined,
+    current: () => key,
+    after(e: unknown) {
+      if (auto && renewsIdempotencyKey(e)) key = newIdempotencyKey();
+    },
+  };
 }
 
 /** A random UUID v4, for Idempotency-Key. */
@@ -1141,10 +1181,14 @@ export class Kosa8Cloud {
   /** @internal One call, retried as the policy and the call allow. */
   request<T = Json>(method: string, path: string, body?: unknown, opts: CloudRequestOptions = {}): Promise<T> {
     const policy = opts.retry ?? this.retry;
-    const idem = opts.idempotencyKey !== undefined;
-    return callWithRetry(() => this.requestOnce<T>(method, path, body, opts), policy, {
+    const keys = idemKeys(opts);
+    return callWithRetry(() => this.requestOnce<T>(method, path, body, { ...opts, idempotencyKey: keys.current() }), policy, {
       signal: opts.signal,
-      shouldRetry: (e, attempt) => policy.shouldRetry(e, attempt) && retrySafe(method, path, idem, e),
+      shouldRetry: (e, attempt) => {
+        const again = policy.shouldRetry(e, attempt) && retrySafe(method, path, keys.sent, e);
+        if (again) keys.after(e);
+        return again;
+      },
     });
   }
 
@@ -1168,11 +1212,18 @@ export class Kosa8Cloud {
    * starts throws the usual typed error (a 429 is retried); nothing is
    * retried once output flows.
    */
-  requestStream(method: string, path: string, body: unknown, opts: { signal?: AbortSignal; idempotencyKey?: string } = {}): Promise<Response> {
-    const idem = opts.idempotencyKey !== undefined;
-    return callWithRetry(() => this.requestStreamOnce(method, path, body, opts.signal, opts.idempotencyKey), this.retry, {
+  requestStream(
+    method: string, path: string, body: unknown,
+    opts: { signal?: AbortSignal; idempotencyKey?: string; autoIdempotencyKey?: boolean } = {},
+  ): Promise<Response> {
+    const keys = idemKeys(opts);
+    return callWithRetry(() => this.requestStreamOnce(method, path, body, opts.signal, keys.current()), this.retry, {
       signal: opts.signal,
-      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && retrySafe(method, path, idem, e),
+      shouldRetry: (e, attempt) => {
+        const again = this.retry.shouldRetry(e, attempt) && retrySafe(method, path, keys.sent, e);
+        if (again) keys.after(e);
+        return again;
+      },
     });
   }
 
@@ -1462,9 +1513,7 @@ export class CloudSandboxes {
     checkLabels(labels);
     const body = createBody(o);
     if (labels !== undefined) body.labels = labels;
-    const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body, {
-      idempotencyKey: opts.idempotencyKey ?? newIdempotencyKey(),
-    });
+    const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body, idemOpts(opts.idempotencyKey));
     const box = new CloudSandbox(this.cloud, r.sandbox);
     if (opts.wait !== false && !SETTLED.has(box.info.state)) {
       try {
@@ -1500,7 +1549,7 @@ export class CloudSandboxes {
     const body: Json = { count: n, ...createBody(create), ...fanoutBody(fan) };
     const r = await this.cloud.request<{
       sandboxes?: CloudSandboxInfo[]; failed?: CloudFanoutFailure[]; requested?: number; run_id?: string;
-    }>('POST', '/v1/sandboxes/batch', body, { idempotencyKey: idempotencyKey ?? newIdempotencyKey() });
+    }>('POST', '/v1/sandboxes/batch', body, idemOpts(idempotencyKey));
     const batch = toBatch(
       (r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s)), r.failed ?? [], r.requested ?? n, r.run_id ?? fan.runId,
     );
@@ -1732,7 +1781,7 @@ export class CloudSandbox {
     if (runId !== undefined) body.run_id = runId;
     if (opts.rollout) body.rollout = opts.rollout;
     const r = await this.cloud.request<Json>('POST', this.path('/grade'), body, {
-      idempotencyKey: opts.idempotencyKey ?? newIdempotencyKey(), signal: opts.signal,
+      ...idemOpts(opts.idempotencyKey), signal: opts.signal,
     });
     return gradeResult(r ?? {});
   }
@@ -1837,10 +1886,10 @@ export class CloudSandbox {
     const fan: CloudFanoutOptions = { ...o, runId: o.runId ?? amb.runId, leaseS: o.leaseS ?? amb.leaseS };
     const body: Json = { n: count, ...fanoutBody(fan) };
     type ForkAnswer = { sandboxes?: CloudSandboxInfo[]; failed?: CloudFanoutFailure[]; requested?: number; run_id?: string };
-    const idempotencyKey = o.idempotencyKey ?? newIdempotencyKey();
+    const idem = idemOpts(o.idempotencyKey);
     const r = o.onProgress
-      ? await this.forkStreamed<ForkAnswer>(body, idempotencyKey, o.onProgress)
-      : await this.cloud.request<ForkAnswer>('POST', this.path('/fork'), body, { idempotencyKey });
+      ? await this.forkStreamed<ForkAnswer>(body, idem, o.onProgress)
+      : await this.cloud.request<ForkAnswer>('POST', this.path('/fork'), body, idem);
     return toBatch((r.sandboxes ?? []).map((s) => new CloudSandbox(this.cloud, s)), r.failed ?? [], r.requested ?? count, r.run_id ?? fan.runId);
   }
 
@@ -1850,9 +1899,9 @@ export class CloudSandbox {
    * error when it is one). An API that does not stream answers plain JSON,
    * returned as it is.
    */
-  private async forkStreamed<T>(body: Json, idempotencyKey: string, onProgress: (p: CloudForkProgress) => void): Promise<T> {
+  private async forkStreamed<T>(body: Json, idem: ReturnType<typeof idemOpts>, onProgress: (p: CloudForkProgress) => void): Promise<T> {
     const path = this.path('/fork');
-    const resp = await this.cloud.requestStream('POST', path, body, { idempotencyKey });
+    const resp = await this.cloud.requestStream('POST', path, body, idem);
     const text = new TextDecoder();
     let buf = '';
     const handle = (line: string): { done: true; value: T } | null => {
