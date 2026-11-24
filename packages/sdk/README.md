@@ -72,7 +72,7 @@ With no `template`, a sandbox starts from the org's default, `base`:
   console.log(done.exit, done.output);
   ```
 
-- A request body is at most **64 KiB** (`413 too_large`), so send big inputs as files. A file is at most **8 MiB** through the API.
+- A request body is at most **64 KiB** (`413 too_large`), so send big inputs as files. A file has no size cap but the sandbox's disk; one file request through the API is at most **100 MB**, so send a bigger file in parts with `files.write(path, part, { offset })` or PUT it to `files.link(path, { method: 'PUT' })`.
 
 ### Sandboxes
 
@@ -107,8 +107,8 @@ These need the host's data plane. On hosts without it the API answers 501 (`not_
 
 | method | endpoint |
 | --- | --- |
-| `box.files.read(path)` → `Uint8Array`, `box.files.readText(path)` → `string` | `GET …/files?path=` (raw bytes) |
-| `box.files.write(path, string \| Uint8Array)` → `CloudFileInfo` | `PUT …/files?path=` (raw bytes) |
+| `box.files.read(path, { range? })` → `Uint8Array`, `box.files.readText(path)` → `string` | `GET …/files?path=` (raw bytes; `range: { start, end }`, `{ start }` or `{ last }` sends `Range`) |
+| `box.files.write(path, string \| Uint8Array, { offset?, append?, mode? })` → `CloudFileInfo` | `PUT …/files?path=&offset=&append=&mode=` (raw bytes; an append is never retried after a 5xx) |
 | `box.files.list(path = '/workspace')` → `CloudFileInfo[]` | `GET …/files/list?path=` |
 | `box.files.mkdir(path)` → `CloudFileInfo` | `POST …/files/mkdir` |
 | `box.files.delete(path, { recursive? })` → the removed path | `DELETE …/files?path=` |
@@ -225,7 +225,7 @@ const r = await box.runCode('import math; math.pi'); // stateful Python; charts 
 | `box.terminal({ cols?, rows?, command? })` → `{ url, expires_at, protocol }` | `POST …/terminal` |
 | `box.runCode(code, { context?, timeoutS? })` → `{ results, stdout, stderr, error? }` | `POST …/code` |
 | `box.codeContexts.list()`, `create(name?)`, `reset(name)`, `delete(name)` | `…/code/contexts` |
-| `box.files.readRaw(path)`, `box.files.writeRaw(path, data)` (no 8 MiB cap) | `…/files/raw` |
+| `box.files.readRaw(path)`, `box.files.writeRaw(path, data)` (same options) | `…/files/raw` |
 | `box.files.link(path, { method?: 'GET' \| 'PUT', ttlS? })` → presigned URL | `POST …/files/link` |
 | `box.egress()`, `box.setEgress({ internet?, allow?, deny?, presets? })`, `box.resetEgress()` | `…/egress` |
 | `cloud.egressPresets()`, `cloud.orgEgress()`, `cloud.setOrgEgress(policy \| null, { enforce? })` | `/v1/egress/presets`, `/v1/org/egress` |

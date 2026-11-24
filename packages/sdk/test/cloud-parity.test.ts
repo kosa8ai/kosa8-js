@@ -235,6 +235,41 @@ describe('CloudSandbox.files', () => {
     expect(seen[1]!.url.searchParams.get('path')).toBe('/workspace/y');
   });
 
+  it('read sends one Range: start-end, start- or the last n bytes', async () => {
+    const { sbx, seen } = box(() => [206, new Uint8Array([1, 2]), { 'Content-Range': 'bytes 0-1/10' }]);
+    expect(Array.from(await sbx.files.read('/workspace/f', { range: { start: 0, end: 1 } }))).toEqual([1, 2]);
+    expect(seen[0]!.headers.Range).toBe('bytes=0-1');
+    await sbx.files.read('/workspace/f', { range: { start: 5 } });
+    expect(seen[1]!.headers.Range).toBe('bytes=5-');
+    await sbx.files.readRaw('/workspace/f', { range: { last: 3 } });
+    expect(seen[2]!.headers.Range).toBe('bytes=-3');
+    await expect(sbx.files.read('/f', { range: { start: 4, end: 2 } })).rejects.toThrow(/range.end/);
+    expect(seen).toHaveLength(3);
+  });
+
+  it('write takes offset, append and mode as the API does', async () => {
+    const { sbx, seen } = box(() => [200, { file: { path: '/workspace/big' } }]);
+    await sbx.files.write('/workspace/big', 'part2', { offset: 1048576, mode: 0o755 });
+    expect(seen[0]!.url.searchParams.get('offset')).toBe('1048576');
+    expect(seen[0]!.url.searchParams.get('mode')).toBe('755');
+    await sbx.files.write('/workspace/log', 'line\n', { append: true, mode: '0644' });
+    expect(seen[1]!.url.searchParams.get('append')).toBe('1');
+    expect(seen[1]!.url.searchParams.get('mode')).toBe('0644');
+    await expect(sbx.files.write('/f', 'x', { offset: 0, append: true })).rejects.toThrow(/offset or append/);
+    await expect(sbx.files.write('/f', 'x', { mode: '999' })).rejects.toThrow(/octal/);
+    expect(seen).toHaveLength(2);
+  });
+
+  it('an append is not sent again after a 5xx (it would be written twice); a plain write is', async () => {
+    const { f, seen } = stub(() => [502, { error: 'host_failed', message: 'the host failed' }]);
+    const cloud = new Kosa8Cloud({ apiKey: KEY, env: {}, fetch: f, retry: { attempts: 3, baseMs: 0 } });
+    const sbx = new CloudSandbox(cloud, info());
+    await expect(sbx.files.write('/workspace/log', 'x', { append: true })).rejects.toThrow(/host failed/);
+    expect(seen).toHaveLength(1);
+    await expect(sbx.files.write('/workspace/x', 'x')).rejects.toThrow(/host failed/);
+    expect(seen).toHaveLength(4);
+  });
+
   it('list defaults to /workspace', async () => {
     const { sbx, seen } = box(() => [200, { path: '/workspace', files: [{ name: 'a', path: '/workspace/a', type: 'dir' }] }]);
     expect(await sbx.files.list()).toEqual([{ name: 'a', path: '/workspace/a', type: 'dir' }]);

@@ -1243,15 +1243,26 @@ export class Kosa8Cloud {
     return resp;
   }
 
-  /** @internal Raw bytes in and/or out (the files endpoints), retried as `request` is. */
-  requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
-    return callWithRetry(() => this.requestBytesOnce(method, path, bytes), this.retry, {
-      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && retrySafe(method, path, false, e),
+  /**
+   * @internal Raw bytes in and/or out (the files endpoints), retried as
+   * `request` is. `repeatable: false` sends it once past a refusal (a PUT
+   * that appends must not be written twice).
+   */
+  requestBytes(
+    method: string, path: string, bytes?: Uint8Array,
+    opts: { headers?: Record<string, string>; signal?: AbortSignal; repeatable?: boolean } = {},
+  ): Promise<Uint8Array> {
+    const repeatable = opts.repeatable ?? true;
+    return callWithRetry(() => this.requestBytesOnce(method, path, bytes, opts.headers, opts.signal), this.retry, {
+      signal: opts.signal,
+      shouldRetry: (e, attempt) => this.retry.shouldRetry(e, attempt) && (repeatable ? retrySafe(method, path, false, e) : refusedBeforeRun(e)),
     });
   }
 
-  private async requestBytesOnce(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array> {
-    const resp = await this.send(method, path, bytes !== undefined ? { bytes } : {}, 'application/octet-stream, application/json');
+  private async requestBytesOnce(
+    method: string, path: string, bytes?: Uint8Array, headers: Record<string, string> = {}, signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    const resp = await this.send(method, path, bytes !== undefined ? { bytes } : {}, 'application/octet-stream, application/json', signal, headers);
     const buf = new Uint8Array(await resp.arrayBuffer());
     if (!resp.ok) {
       const text = new TextDecoder().decode(buf);
@@ -2084,8 +2095,63 @@ export class CloudSandbox {
   }
 }
 
+/** `files.read(path, opts)`: one byte range and/or a signal. */
+export interface CloudFileReadOptions {
+  /**
+   * One byte range (the API answers 206; 416 past the end): `{ start, end }`
+   * (both inclusive), `{ start }` to the end, or `{ last: n }` for the last n
+   * bytes.
+   */
+  range?: { start: number; end?: number } | { last: number };
+  signal?: AbortSignal;
+}
+
+/** `files.write(path, data, opts)`. */
+export interface CloudFileWriteOptions {
+  /**
+   * Write at this byte, keeping the rest of the file and growing it as
+   * needed: parts of a big upload, in any order. Not with `append`.
+   */
+  offset?: number;
+  /** Add the data at the end of the file. Never retried after a server failure, so it is not written twice. */
+  append?: boolean;
+  /** Permission bits: octal text such as '755', or a number such as 0o755. */
+  mode?: string | number;
+  signal?: AbortSignal;
+}
+
+function rangeHeader(r: NonNullable<CloudFileReadOptions['range']>): string {
+  if ('last' in r) {
+    checkInt('range.last', r.last, 1, Number.MAX_SAFE_INTEGER);
+    return `bytes=-${r.last}`;
+  }
+  checkInt('range.start', r.start, 0, Number.MAX_SAFE_INTEGER);
+  if (r.end === undefined) return `bytes=${r.start}-`;
+  checkInt('range.end', r.end, r.start, Number.MAX_SAFE_INTEGER);
+  return `bytes=${r.start}-${r.end}`;
+}
+
+function writeQuery(opts: CloudFileWriteOptions): string {
+  let q = '';
+  if (opts.offset !== undefined && opts.append) throw new Kosa8Error('give offset or append, not both');
+  if (opts.offset !== undefined) {
+    checkInt('offset', opts.offset, 0, Number.MAX_SAFE_INTEGER);
+    q += `&offset=${opts.offset}`;
+  }
+  if (opts.append) q += '&append=1';
+  if (opts.mode !== undefined) {
+    const m = typeof opts.mode === 'number' ? opts.mode.toString(8) : opts.mode;
+    if (!/^[0-7]{3,4}$/.test(m)) throw new Kosa8Error(`mode must be octal permission bits such as '755', got ${String(opts.mode)}`);
+    q += `&mode=${m}`;
+  }
+  return q;
+}
+
 /**
- * Files in a cloud sandbox, up to 8 MiB each. A sleeping sandbox wakes first.
+ * Files in a cloud sandbox. A sleeping sandbox wakes first. The bytes are
+ * streamed to the host; one request through the API is at most 100 MB, so
+ * send a bigger file in parts with `offset` (or PUT it to `link(path, {
+ * method: 'PUT' })`, which goes to the host straight).
  *
  * Needs the host's data plane; on hosts without it the API answers 501
  * (`not_available`/`not_supported`), raised as `Kosa8UnsupportedError`. Not
@@ -2098,9 +2164,10 @@ export class CloudSandboxFiles {
     return `${this.base}${suffix}?path=${encodeURIComponent(path)}${extra}`;
   }
 
-  /** A file's bytes. */
-  read(path: string): Promise<Uint8Array> {
-    return this.cloud.requestBytes('GET', this.q('/files', path));
+  /** A file's bytes, or one byte range of it. */
+  async read(path: string, opts: CloudFileReadOptions = {}): Promise<Uint8Array> {
+    const headers: Record<string, string> = opts.range ? { Range: rangeHeader(opts.range) } : {};
+    return this.cloud.requestBytes('GET', this.q('/files', path), undefined, { headers, signal: opts.signal });
   }
 
   /** A file as UTF-8 text. */
@@ -2108,10 +2175,15 @@ export class CloudSandboxFiles {
     return new TextDecoder().decode(await this.read(path));
   }
 
-  /** Write a file (a string is written as UTF-8). Its parent folder must exist. */
-  async write(path: string, data: string | Uint8Array): Promise<CloudFileInfo> {
+  /**
+   * Write a file (a string is written as UTF-8), or with `offset` / `append`
+   * part of one. Its parent folder must exist.
+   */
+  async write(path: string, data: string | Uint8Array, opts: CloudFileWriteOptions = {}): Promise<CloudFileInfo> {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    const out = await this.cloud.requestBytes('PUT', this.q('/files', path), bytes);
+    const out = await this.cloud.requestBytes('PUT', this.q('/files', path, writeQuery(opts)), bytes, {
+      signal: opts.signal, repeatable: !opts.append,
+    });
     const r = JSON.parse(new TextDecoder().decode(out) || '{}') as { file?: CloudFileInfo | null };
     return r.file ?? { path };
   }
@@ -2128,14 +2200,17 @@ export class CloudSandboxFiles {
   }
 
   /** A file's bytes with no 8 MiB cap (the streamed endpoint). */
-  readRaw(path: string): Promise<Uint8Array> {
-    return this.cloud.requestBytes('GET', this.q('/files/raw', path));
+  async readRaw(path: string, opts: CloudFileReadOptions = {}): Promise<Uint8Array> {
+    const headers: Record<string, string> = opts.range ? { Range: rangeHeader(opts.range) } : {};
+    return this.cloud.requestBytes('GET', this.q('/files/raw', path), undefined, { headers, signal: opts.signal });
   }
 
   /** Write a file with no 8 MiB cap (the streamed endpoint). */
-  async writeRaw(path: string, data: string | Uint8Array): Promise<CloudFileInfo> {
+  async writeRaw(path: string, data: string | Uint8Array, opts: CloudFileWriteOptions = {}): Promise<CloudFileInfo> {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    const out = await this.cloud.requestBytes('PUT', this.q('/files/raw', path), bytes);
+    const out = await this.cloud.requestBytes('PUT', this.q('/files/raw', path, writeQuery(opts)), bytes, {
+      signal: opts.signal, repeatable: !opts.append,
+    });
     let r: { file?: CloudFileInfo | null } = {};
     try {
       r = JSON.parse(new TextDecoder().decode(out) || '{}');
