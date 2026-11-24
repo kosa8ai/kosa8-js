@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Autopilot bots: `cloud.bots` with `list()` (`bots`, `paused_all`, `pending_approvals`), `templates()`, `template(id)`, `plan({ template | spec, name, replay })`, `compile(text)` (at most 500 characters, checked before sending), `create({ template | spec, name, sponsor, budgetUsd, scope, notify })` (exactly one of template or spec; starts as a draft), `get`, `update`, `delete`, `enable`, `disable`, `run(id, { dryRun })` (a dry run by default), `runs(id, { limit })`, `getRun`, `cancelRun`, `undoStep(runId, key)`, `pauseAll()`, `resumeAll()`.
+- `cloud.approvals`: `list({ state, limit })` (pending by default), `get`, `approve(id, { reason, editedArgs })`, `reject(id, { reason })`. Deciding, `enable` and `resumeAll` need a person's key: a 403 `human_required` is thrown as `Kosa8HumanApprovalRequiredError` (a `Kosa8PolicyError`). An agent never approves its own action.
+
 ## 0.9.0 - 2026-11-24
 
 - GitHub repos: `repo` on `cloud.sandboxes.create` and `cloud.run` (`"owner/name"`, `"owner/name@ref"` or `{ name, ref, path, depth }`), `info.repo` / `run.repo`; `cloud.github.status()`, `repos(query)`, `reposPage({ query, page })`, `branches(repo)`; `box.repo()`, `box.push({ branch, message, path })`, `box.pullRequest({ title, body, base, branch, draft })`. The GitHub token is minted by kosa8 per operation for one repo and never enters the sandbox.
