@@ -45,6 +45,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./cloud": {
+      "import": {
+        "types": "./dist/cloud.d.ts",
+        "default": "./dist/cloud.js"
+      },
+      "require": {
+        "types": "./dist/cloud.d.cts",
+        "default": "./dist/cloud.cjs"
+      }
+    },
     "./e2b": {
       "import": {
         "types": "./dist/compat/e2b.d.ts",

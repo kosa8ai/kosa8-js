@@ -47,6 +47,8 @@ console.log((await box.files.list()).map((f) => f.name)); // /workspace by defau
 await box.delete();
 ```
 
+In a browser, a Cloudflare Worker, Deno or Bun, import from `@kosa8/sdk/cloud`: the same cloud client with no Node built-ins (the package root also holds the local daemon client, which needs Node). Pass `{ apiKey }` where there is no `process.env`.
+
 `KOSA8_CLOUD_URL` overrides the address (https only, except localhost). Pass `{ apiKey, baseUrl }` to the constructor instead of using the environment if you prefer.
 
 ### The base template
