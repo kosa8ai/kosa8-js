@@ -28,7 +28,7 @@ function check(label: string, ok: boolean, detail = ''): void {
   if (!ok) failures++;
 }
 
-async function timed<T>(fn: () => Promise<T>): Promise<[T, number]> {
+async function timed<T>(fn: () => PromiseLike<T>): Promise<[T, number]> {
   const t = Date.now();
   const v = await fn();
   return [v, Date.now() - t];
