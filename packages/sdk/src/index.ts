@@ -66,7 +66,7 @@ export {
   failureOf,
   classifyFailure,
 } from './errors.js';
-export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule, FailureClass } from './errors.js';
+export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule, FailureClass, Kosa8LimitOption } from './errors.js';
 export { RetryPolicy, NO_RETRY, callWithRetry } from './retry.js';
 export type { RetryPolicyOptions, RetryCallOptions } from './retry.js';
 export type * from './types.js';

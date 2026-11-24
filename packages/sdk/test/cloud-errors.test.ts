@@ -6,6 +6,7 @@ import {
   Kosa8ConnectionError,
   Kosa8Error,
   Kosa8PaymentRequiredError,
+  Kosa8RateLimitError,
   Kosa8TimeoutError,
   Kosa8UnsupportedError,
 } from '../src/index.js';
@@ -147,5 +148,55 @@ describe('actionable cloud errors', () => {
     const e: any = await cloud.sandboxes.get('sbx_1').catch((x) => x);
     expect(e).toBeInstanceOf(Kosa8TimeoutError);
     expect(e.message).toMatch(/did not answer GET \/v1\/sandboxes\/sbx_1 within 20 ms; retry, or raise timeoutMs/);
+  });
+
+  it('402 plan_limit exposes the contract fields: limit, used, plan, next_plan, options, pack_url, upgrade_url, agent_message', async () => {
+    const e = await fail(answer(402, {
+      error: 'plan_limit', message: 'Your plan allows 5 running sandboxes', limit_name: 'running', limit: 5, used: 5,
+      plan: 'starter', next_plan: 'team', pack_url: 'https://app.kosa8.com/app#packs', upgrade_url: 'https://app.kosa8.com/app#billing',
+      agent_message: 'Tell your person: the plan allows 5 running sandboxes.', failure_class: 'quota', retryable: false,
+      options: [{ kind: 'pack', addon: 'running_5', monthly_usd: 10 }, { kind: 'upgrade', plan: 'team', monthly_usd: 40 }],
+    }));
+    expect(e).toBeInstanceOf(Kosa8PaymentRequiredError);
+    expect(e.code).toBe('plan_limit');
+    expect(e.limitName).toBe('running');
+    expect(e.limit).toBe(5);
+    expect(e.used).toBe(5);
+    expect(e.plan).toBe('starter');
+    expect(e.nextPlan).toBe('team');
+    expect(e.packUrl).toBe('https://app.kosa8.com/app#packs');
+    expect(e.upgradeUrl).toBe('https://app.kosa8.com/app#billing');
+    expect(e.agentMessage).toMatch(/^Tell your person/);
+    expect(e.options.map((o: { kind: string }) => o.kind)).toEqual(['pack', 'upgrade']);
+    expect(e.retryable).toBe(false);
+    expect(e.failureClass).toBe('quota');
+  });
+
+  it('429 quota_exceeded exposes agent_message and request_url and is not retried', async () => {
+    let calls = 0;
+    const f = (async () => {
+      calls++;
+      return new Response(JSON.stringify({
+        error: 'quota_exceeded', message: 'You have 20 running sandboxes, the limit', agent_message: 'Ask for a higher limit.',
+        request_url: 'https://api.kosa8.com/v1/limits/request',
+      }), { status: 429, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const cloud = new Kosa8Cloud({ apiKey: KEY, env: {}, fetch: f, retry: { attempts: 3, baseMs: 0 } });
+    const e: any = await cloud.sandboxes.create().catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Kosa8RateLimitError);
+    expect(e.agentMessage).toBe('Ask for a higher limit.');
+    expect(e.requestUrl).toBe('https://api.kosa8.com/v1/limits/request');
+    expect(e.limit).toBeNull();
+    expect(e.options).toEqual([]);
+    expect(e.retryable).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it('402 spend_cap and starter_limit are quota, not retried', async () => {
+    for (const code of ['spend_cap', 'starter_limit', 'new_account_limit']) {
+      const e = await fail(answer(402, { error: code, message: 'no' }));
+      expect(e.failureClass).toBe('quota');
+      expect(e.retryable).toBe(false);
+    }
   });
 });
