@@ -44,6 +44,8 @@ import {
 import { CloudJobs } from './jobs.js';
 import { CloudApiKeys, CloudAudit, CloudBenchmarks, CloudRl, CloudWebhooks } from './cloud-org.js';
 import { CloudAi, CloudBrowsers } from './cloud-browser.js';
+import { CloudRuns, runOnce } from './cloud-run.js';
+import type { CloudRun, CloudRunOptions } from './cloud-run.js';
 import type { CloudAiSettingsUpdate, CloudBrowser, CloudBrowserOptions } from './cloud-browser.js';
 import type { CloudRecording } from './cloud-more.js';
 import { forkMap } from './forkmap.js';
@@ -120,6 +122,16 @@ export const MAX_BATCH = 1000;
 /** Shortest and longest lease `leaseS` accepts, in seconds (1 minute to 1 day). */
 export const MIN_LEASE_S = 60;
 export const MAX_LEASE_S = 86_400;
+
+/** `box.direct()`: the host's own endpoints for this sandbox and a token for them. */
+export interface CloudDirectAccess {
+  exec_url: string;
+  /** Present when the host serves files directly (GET or PUT ?path=, with Range, offset= and append=). */
+  files_url?: string;
+  token: string;
+  /** When the token stops working, Unix ms. */
+  expires_at: number;
+}
 
 /** A cloud sandbox as the API reports it (the OpenAPI `Sandbox` schema). Times are Unix ms. */
 export interface CloudSandboxInfo {
@@ -717,6 +729,8 @@ export interface CloudRequestOptions {
   autoIdempotencyKey?: boolean;
   /** This call's retry policy instead of the client's. */
   retry?: RetryPolicy;
+  /** This call's timeout instead of the client's `timeoutMs`. */
+  timeoutMs?: number;
 }
 
 /** @internal The caller's key (never changed), else one the SDK makes and may renew. */
@@ -983,6 +997,8 @@ export class Kosa8Cloud {
   readonly benchmarks: CloudBenchmarks;
   /** Org-wide RL calls: compare runs, alert rules. */
   readonly rl: CloudRl;
+  /** Serverless runs made with `run()`: list, get, share (kept 30 days). */
+  readonly runs: CloudRuns;
   /** The retry policy every request uses unless it says otherwise. */
   readonly retry: RetryPolicy;
   /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
@@ -1024,6 +1040,7 @@ export class Kosa8Cloud {
     this.audit = new CloudAudit(this);
     this.benchmarks = new CloudBenchmarks(this);
     this.rl = new CloudRl(this);
+    this.runs = new CloudRuns(this);
     this.retry = toPolicy(options.retry);
   }
 
@@ -1148,6 +1165,17 @@ export class Kosa8Cloud {
     return this.request('GET', '/v1/limits');
   }
 
+  /**
+   * Run code or a command in a fresh sandbox in one call (`POST /v1/run`):
+   * output, exit code and `outputs` files back, the sandbox deleted. A
+   * command that exits non-zero resolves with `status: 'failed'`; a run that
+   * could not run throws. The call waits `timeoutS` (default 60) plus a
+   * minute. Not retried past a refusal: a run is not idempotent.
+   */
+  run(opts: CloudRunOptions): Promise<CloudRun> {
+    return runOnce(this, opts, this.timeoutMs);
+  }
+
   /** Ask kosa8 for a higher running-sandbox limit (once a day); kosa8 answers the owner by email. */
   requestLimit(maxRunning: number, reason?: string): Promise<Json> {
     const body: Json = { max_running: maxRunning };
@@ -1195,7 +1223,7 @@ export class Kosa8Cloud {
   private async requestOnce<T>(method: string, path: string, body: unknown, opts: CloudRequestOptions): Promise<T> {
     const extra: Record<string, string> = {};
     if (opts.idempotencyKey !== undefined) extra['Idempotency-Key'] = opts.idempotencyKey;
-    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json', opts.signal, extra);
+    const resp = await this.send(method, path, body !== undefined ? { json: body } : {}, 'application/json', opts.signal, extra, opts.timeoutMs);
     const text = await resp.text();
     let data: unknown = text;
     try {
@@ -1279,6 +1307,7 @@ export class Kosa8Cloud {
 
   private async send(
     method: string, path: string, raw: RawOptions, accept: string, signal?: AbortSignal, extra: Record<string, string> = {},
+    timeoutMs: number = this.timeoutMs,
   ): Promise<Response> {
     signal?.throwIfAborted();
     const ctl = new AbortController();
@@ -1286,7 +1315,7 @@ export class Kosa8Cloud {
     const timer = setTimeout(() => {
       timedOut = true;
       ctl.abort();
-    }, this.timeoutMs);
+    }, timeoutMs);
     // The caller's signal also ends the request, body included.
     const anyOf = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
     let fetchSignal = ctl.signal;
@@ -1309,7 +1338,7 @@ export class Kosa8Cloud {
       if (signal?.aborted && !timedOut) throw signal.reason ?? e;
       if (ctl.signal.aborted) {
         throw new Kosa8TimeoutError(
-          `kosa8 Cloud did not answer ${method} ${path} within ${this.timeoutMs} ms; retry, or raise timeoutMs in new Kosa8Cloud({ timeoutMs })`,
+          `kosa8 Cloud did not answer ${method} ${path} within ${timeoutMs} ms; retry, or raise timeoutMs in new Kosa8Cloud({ timeoutMs })`,
           { method, path, cause: e },
         );
       }
@@ -1713,6 +1742,18 @@ export class CloudSandbox {
     const body = { ...execBody(cmd, opts), stream: true };
     const resp = await this.cloud.requestStream('POST', this.path('/exec'), body, { signal: opts.signal });
     return new CloudExecStream(resp, this.path('/exec'));
+  }
+
+  /**
+   * A token to send this sandbox's commands to its host directly
+   * (`POST …/direct`): POST `exec_url` with an exec body and
+   * `Authorization: Bearer <token>`; `files_url` takes the same token for big
+   * transfers, when the host has it. The token is for this sandbox only and
+   * lasts until `expires_at` (about 5 minutes). A sleeping sandbox answers
+   * 409: exec through the API, which wakes it.
+   */
+  async direct(): Promise<CloudDirectAccess> {
+    return (await this.cloud.request<{ direct: CloudDirectAccess }>('POST', this.path('/direct'))).direct;
   }
 
   /** Snapshot it and free its VM; it then costs only snapshot storage. */
