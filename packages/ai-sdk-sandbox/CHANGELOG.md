@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Accepts @kosa8/sdk 0.6 and 0.7 (`^0.4.1 || ^0.5.0 || ^0.6.0 || ^0.7.0`); the published 0.2.1 takes only `^0.4.1 || ^0.5.0`, so it pairs @kosa8/sdk 0.7 with a second 0.5 copy.
+
 ## 0.2.1
 
 - Accepts @kosa8/sdk 0.5.0 (`^0.4.1 || ^0.5.0`).

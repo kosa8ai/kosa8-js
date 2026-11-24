@@ -209,7 +209,7 @@ await cloud.snapshots.list();            // the org's snapshots
 await cloud.snapshots.delete(snap.id);
 ```
 
-A sized create (`size`, `cpus`+`memMb`, `image` or `diskGb`) boots cold and answers `creating`; `create` polls until it is running (or throws with `last_error`). `size` is `2x4`, `4x8`, `8x16` or `16x32` (`CLOUD_SIZES`). `docker` makes the sandbox persistent. `cpu: 'dedicated'` gives whole physical cores. `region` takes `us-ash1`, `eu-hel1` or the area alone (`us`, `eu`). A create `{ snapshot }` takes the snapshot's template, size and image, so `template`, `size`, `cpus`, `memMb`, `image`, `diskGb`, `docker`, `persistent`, `cpu` and `region` are refused before any request. `env` values are never logged or returned.
+A sized create (`size`, `cpus`+`memMb`, `image` or `diskGb`) boots cold and answers `creating`; `create` polls until it is running (or throws with `last_error`). `size` is `0.25x0.5`, `0.5x1`, `1x2` (small sizes, `SMALL_CLOUD_SIZES`), `2x4`, `4x8`, `8x16` or `16x32` (`CLOUD_SIZES`). `docker` makes the sandbox persistent. `cpu: 'dedicated'` gives whole physical cores. `region` takes `us-ash1` (Ashburn, VA, the one live region today) or the area alone (`us`). A create `{ snapshot }` takes the snapshot's template, size and image, so `template`, `size`, `cpus`, `memMb`, `image`, `diskGb`, `docker`, `persistent`, `cpu` and `region` are refused before any request. `env` values are never logged or returned.
 
 ### Previews, terminal, code interpreter
 
