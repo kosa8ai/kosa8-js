@@ -24,6 +24,11 @@ export {
   Kosa8RateLimitError,
   Kosa8OrgFrozenError,
   Kosa8ExecTimeoutError,
+  Kosa8GitHubNotConnectedError,
+  Kosa8GitHubPermissionsError,
+  Kosa8NoChangesError,
+  Kosa8RepoNotFoundError,
+  Kosa8GitHubUnavailableError,
   errorFromResponse,
   FAILURE_CLASSES,
   failureOf,
@@ -31,6 +36,20 @@ export {
 } from './errors.js';
 export type { ApprovalRefusal, ApprovalRequirement, ApprovalAction, ApprovalRule, FailureClass, Kosa8LimitOption } from './errors.js';
 export { RetryPolicy, NO_RETRY, callWithRetry } from './retry.js';
+export { CloudGitHub, REPO_NAME_RE, repoBody } from './cloud-github.js';
+export type {
+  CloudRepoSpec,
+  CloudSandboxRepo,
+  CloudGitHubStatus,
+  CloudGitHubInstallation,
+  CloudGitHubRepo,
+  CloudGitHubRepoPage,
+  CloudGitHubBranches,
+  CloudPushOptions,
+  CloudPushResult,
+  CloudPullRequestOptions,
+  CloudPullRequest,
+} from './cloud-github.js';
 export type { RetryPolicyOptions, RetryCallOptions } from './retry.js';
 export type * from './types.js';
 export {

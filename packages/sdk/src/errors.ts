@@ -272,6 +272,22 @@ export class Kosa8ApiError extends Kosa8Error {
   get packUrl(): string | null {
     return bodyString(this.body, 'pack_url');
   }
+
+  /** 409 github_not_connected: where an admin connects GitHub. */
+  get connectUrl(): string | null {
+    return bodyString(this.body, 'connect_url');
+  }
+
+  /** 409 github_permissions: where on GitHub to approve the permissions kosa8 lacks. */
+  get settingsUrl(): string | null {
+    return bodyString(this.body, 'settings_url');
+  }
+
+  /** 409 github_permissions: the GitHub App permissions missing (contents:write, pull_requests:write, ...); [] otherwise. */
+  get missingPermissions(): string[] {
+    const v = typeof this.body === 'object' && this.body !== null ? (this.body as Record<string, unknown>).missing : undefined;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  }
 }
 
 /** 400: the request was malformed or a value was refused (an egress policy, say). */
@@ -301,6 +317,21 @@ export class Kosa8NotFoundError extends Kosa8ApiError {}
 
 /** 409: a conflict, e.g. the sandbox exists but is not running, or a snapshot id is taken. */
 export class Kosa8ConflictError extends Kosa8ApiError {}
+
+/** 409 github_not_connected: the org has not connected GitHub yet; an admin connects it at `connectUrl`. */
+export class Kosa8GitHubNotConnectedError extends Kosa8ConflictError {}
+
+/** 409 github_permissions: the kosa8 GitHub App lacks `missingPermissions`; approve them at `settingsUrl`. */
+export class Kosa8GitHubPermissionsError extends Kosa8ConflictError {}
+
+/** 409 no_changes: nothing changed in the sandbox's repo, so there is nothing to push. */
+export class Kosa8NoChangesError extends Kosa8ConflictError {}
+
+/** 404 repo_not_found: the repo is not visible to the org's GitHub installations (or does not exist). */
+export class Kosa8RepoNotFoundError extends Kosa8NotFoundError {}
+
+/** 502 github_unavailable: GitHub did not answer or rate-limited kosa8; try again after `retryAfter` seconds. */
+export class Kosa8GitHubUnavailableError extends Kosa8ApiError {}
 
 /** 501: the platform cannot do this (sandboxes need macOS on Apple silicon or Linux with KVM). */
 export class Kosa8UnsupportedError extends Kosa8ApiError {}
@@ -383,6 +414,12 @@ export function errorFromResponse(
   if (status === 403 && isRefusal(approval)) {
     return new Kosa8ApprovalRequiredError(message, approval, opts);
   }
+  const code = ctx.code ?? (typeof body === 'object' && body !== null ? (body as Record<string, unknown>).code : undefined);
+  if (status === 409 && code === 'github_not_connected') return new Kosa8GitHubNotConnectedError(message, opts);
+  if (status === 409 && code === 'github_permissions') return new Kosa8GitHubPermissionsError(message, opts);
+  if (status === 409 && code === 'no_changes') return new Kosa8NoChangesError(message, opts);
+  if (status === 404 && code === 'repo_not_found') return new Kosa8RepoNotFoundError(message, opts);
+  if (code === 'github_unavailable') return new Kosa8GitHubUnavailableError(message, opts);
   switch (status) {
     case 400:
       return new Kosa8BadRequestError(message, opts);

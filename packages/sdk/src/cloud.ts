@@ -45,6 +45,10 @@ import { CloudJobs } from './jobs.js';
 import { CloudApiKeys, CloudAudit, CloudBenchmarks, CloudRl, CloudWebhooks } from './cloud-org.js';
 import { CloudAi, CloudBrowsers } from './cloud-browser.js';
 import { CloudRuns, runOnce } from './cloud-run.js';
+import { CloudGitHub, pullRequestBody, pushBody, repoBody, sandboxRepo } from './cloud-github.js';
+import type {
+  CloudPullRequest, CloudPullRequestOptions, CloudPushOptions, CloudPushResult, CloudRepoSpec, CloudSandboxRepo,
+} from './cloud-github.js';
 import type { CloudRun, CloudRunOptions } from './cloud-run.js';
 import type { CloudAiSettingsUpdate, CloudBrowser, CloudBrowserOptions } from './cloud-browser.js';
 import type { CloudRecording } from './cloud-more.js';
@@ -179,6 +183,8 @@ export interface CloudSandboxInfo {
   lease_s?: number | null;
   /** It records its desktop to MP4 (saved to Recordings when it is deleted). */
   record?: boolean;
+  /** The GitHub repo it was started from (`repo` at create), and whether the clone is done. */
+  repo?: CloudSandboxRepo | null;
   [k: string]: unknown;
 }
 
@@ -235,6 +241,13 @@ export interface CloudCreateOptions {
   cpu?: 'shared' | 'dedicated';
   /** Your name for it; `list({ name })` finds it. */
   name?: string;
+  /**
+   * Start from a GitHub repo of the org's connected GitHub: `"owner/name"`,
+   * `"owner/name@ref"` or `{ name, ref, path, depth }`. It is cloned into
+   * /workspace/<name> (or `path`); no GitHub token ever enters the sandbox.
+   * `info.repo` says whether the clone is done (`box.repo()` checks again).
+   */
+  repo?: CloudRepoSpec;
   /** Environment variables every command in the sandbox gets. Never logged or returned. */
   env?: Record<string, string>;
   /**
@@ -1002,6 +1015,8 @@ export class Kosa8Cloud {
   readonly rl: CloudRl;
   /** Serverless runs made with `run()`: list, get, share (kept 30 days). */
   readonly runs: CloudRuns;
+  /** The org's connected GitHub: status, repos, branches. */
+  readonly github: CloudGitHub;
   /** The retry policy every request uses unless it says otherwise. */
   readonly retry: RetryPolicy;
   /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
@@ -1044,6 +1059,7 @@ export class Kosa8Cloud {
     this.benchmarks = new CloudBenchmarks(this);
     this.rl = new CloudRl(this);
     this.runs = new CloudRuns(this);
+    this.github = new CloudGitHub(this);
     this.retry = toPolicy(options.retry);
   }
 
@@ -1556,6 +1572,7 @@ export class CloudSandboxes {
     checkLabels(labels);
     const body = createBody(o);
     if (labels !== undefined) body.labels = labels;
+    if (opts.repo !== undefined) body.repo = repoBody(opts.repo);
     const r = await this.cloud.request<{ sandbox: CloudSandboxInfo }>('POST', '/v1/sandboxes', body, idemOpts(opts.idempotencyKey));
     const box = new CloudSandbox(this.cloud, r.sandbox);
     if (opts.wait !== false && !SETTLED.has(box.info.state)) {
@@ -1694,6 +1711,30 @@ export class CloudSandbox {
 
   private path(suffix = ''): string {
     return `/v1/sandboxes/${encodeURIComponent(this.info.id)}${suffix}`;
+  }
+
+  /**
+   * The GitHub repo it was started from, with `changes` (files changed,
+   * insertions, deletions). A clone still pending is tried again.
+   */
+  async repo(): Promise<CloudSandboxRepo> {
+    const r = await sandboxRepo(this.cloud, this.info.id);
+    this.info.repo = r;
+    return r;
+  }
+
+  /**
+   * Commit everything that changed in its repo and push it to a branch
+   * (default kosa8/<short id>). kosa8 pushes with a token for this one repo
+   * that never enters the sandbox. Nothing changed: `Kosa8NoChangesError`.
+   */
+  push(opts: CloudPushOptions = {}): Promise<CloudPushResult> {
+    return this.cloud.request<CloudPushResult>('POST', this.path('/github/push'), pushBody(opts));
+  }
+
+  /** Push (as `push()`) and open a pull request, a draft unless `draft: false`. */
+  pullRequest(opts: CloudPullRequestOptions = {}): Promise<CloudPullRequest> {
+    return this.cloud.request<CloudPullRequest>('POST', this.path('/github/pull-request'), pullRequestBody(opts));
   }
 
   /** Files in the sandbox. Needs the host's data plane (see `CloudSandboxFiles`). */

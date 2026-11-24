@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- GitHub repos: `repo` on `cloud.sandboxes.create` and `cloud.run` (`"owner/name"`, `"owner/name@ref"` or `{ name, ref, path, depth }`), `info.repo` / `run.repo`; `cloud.github.status()`, `repos(query)`, `reposPage({ query, page })`, `branches(repo)`; `box.repo()`, `box.push({ branch, message, path })`, `box.pullRequest({ title, body, base, branch, draft })`. The GitHub token is minted by kosa8 per operation for one repo and never enters the sandbox.
+- Errors: `Kosa8GitHubNotConnectedError` (409 `github_not_connected`, `connectUrl`), `Kosa8GitHubPermissionsError` (409 `github_permissions`, `missingPermissions`, `settingsUrl`), `Kosa8NoChangesError` (409 `no_changes`), `Kosa8RepoNotFoundError` (404 `repo_not_found`) and `Kosa8GitHubUnavailableError` (502 `github_unavailable`). The 409 ones are still `Kosa8ConflictError`, the 404 one `Kosa8NotFoundError`.
+
 ## 0.8.0 - 2026-11-23
 
 - Errors: every HTTP error (`Kosa8ApiError` and subclasses) has the cloud's contract fields as getters: `upgradeUrl`, `agentMessage` (also on a 429 `quota_exceeded`), `requestUrl`, and for a 402 `plan_limit` `limitName`, `limit`, `used`, `plan`, `nextPlan`, `feature`, `options`, `packUrl`. `spend_cap`, `starter_limit` and `new_account_limit` are quota codes.

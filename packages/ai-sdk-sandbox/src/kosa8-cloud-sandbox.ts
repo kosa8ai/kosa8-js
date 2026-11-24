@@ -83,6 +83,28 @@ export interface Kosa8CloudCreateSettings extends Kosa8CloudSandboxSettings {
   egress?: CloudEgressPolicy;
   /** Shell commands run once on a fresh sandbox, before an AI SDK template's prepare. */
   setupCommands?: ReadonlyArray<string>;
+  /**
+   * Start in a checkout of a repo from the org's connected GitHub:
+   * `"owner/name"`, `"owner/name@ref"` or `{ name, ref, path, depth }`. It is
+   * cloned into /workspace/<name> (or `path`), which becomes the working
+   * directory unless `workingDirectory` is set. No GitHub token enters the
+   * sandbox; `session.sandbox.pullRequest()` sends the changes back.
+   */
+  repo?: Kosa8CloudRepo;
+}
+
+/**
+ * A GitHub repo to start from (the same shape as `CloudRepoSpec` in
+ * @kosa8/sdk, kept here so older @kosa8/sdk versions still type-check;
+ * cloning needs an @kosa8/sdk that sends `repo`).
+ */
+export type Kosa8CloudRepo = string | { name: string; ref?: string; path?: string; depth?: number };
+
+/** Where a repo spec is cloned: its `path`, else /workspace/<name>. */
+export function repoWorkingDirectory(spec: Kosa8CloudRepo): string {
+  if (typeof spec === 'object' && spec.path) return spec.path;
+  const full = typeof spec === 'string' ? spec.split('@')[0]! : spec.name;
+  return `${CLOUD_FILES_ROOT}/${full.split('/').pop()}`;
 }
 
 export type Kosa8CloudSandboxSessionCreateOptions = Kosa8CloudCreateSettings & {
@@ -172,6 +194,9 @@ async function create(
   identity?: string,
 ): Promise<Kosa8CloudNetworkSandboxSession> {
   signal?.throwIfAborted();
+  if (settings.repo !== undefined && settings.workingDirectory === undefined) {
+    settings = { ...settings, workingDirectory: repoWorkingDirectory(settings.repo) };
+  }
   const cloud = cloudFrom(settings);
   const egress = egressFrom(settings);
   const workdir = settings.workingDirectory ?? CLOUD_FILES_ROOT;
@@ -189,6 +214,7 @@ async function create(
     sleepAfterS: settings.sleepAfterS,
     secrets: settings.secrets,
     egress,
+    ...(settings.repo !== undefined ? ({ repo: settings.repo } as Partial<CloudCreateOptions>) : {}),
   };
   const sized: CloudCreateOptions = {
     template: kosa8Template,
