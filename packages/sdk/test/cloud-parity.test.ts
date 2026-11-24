@@ -224,7 +224,7 @@ describe('CloudSandbox.files', () => {
   });
 
   it('write sends a string or bytes as application/octet-stream', async () => {
-    const fi = { name: 'x', path: '/workspace/x', type: 'file', size: 3, mode: '-rw-r--r--', mod_time: '2026-11-12T00:00:00Z' };
+    const fi = { name: 'x', path: '/workspace/x', type: 'file', size: 3, mode: 420, mod_time: '2026-11-12T00:00:00Z' };
     const { sbx, seen } = box(() => [200, { file: fi }]);
     expect(await sbx.files.write('/workspace/x', 'abc')).toEqual(fi);
     expect(seen[0]!.method).toBe('PUT');

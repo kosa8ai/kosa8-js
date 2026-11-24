@@ -448,11 +448,14 @@ export interface CloudSandboxPage {
 export interface CloudFileInfo {
   name?: string;
   path: string;
-  /** file | dir */
-  type?: 'file' | 'dir' | (string & {});
+  /** file | dir | symlink | other */
+  type?: 'file' | 'dir' | 'symlink' | 'other' | (string & {});
   size?: number;
-  mode?: string;
+  /** Unix permission bits as a number, e.g. 420 for 0644 (as the API sends it). */
+  mode?: number;
   mod_time?: string;
+  /** A symlink's target. */
+  link?: string;
 }
 
 /** A saved checkpoint of a cloud sandbox: memory, processes and disk. */

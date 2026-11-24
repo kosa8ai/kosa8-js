@@ -25,10 +25,10 @@
 
 import { Kosa8Error, Kosa8NotFoundError, Kosa8AuthError, Kosa8RateLimitError, Kosa8ExecTimeoutError, Kosa8TimeoutError, Kosa8BadRequestError, Kosa8ConflictError } from '../errors.js';
 import { EXEC_LIMIT_S } from '../cloud.js';
-import type { CloudCreateOptions, CloudSandbox, Kosa8Cloud } from '../cloud.js';
+import type { CloudCreateOptions, CloudFileInfo, CloudSandbox, Kosa8Cloud } from '../cloud.js';
 import type { CloudEgressPolicy } from '../cloud-features.js';
 import {
-  Unsupported, WORKSPACE, absPath, bashOrSh, checkUrl, cloudFor, createBox, inDir, localFs, mustRun, setDefaultCloud, shq, sizeFor, sleep, statEntry, toBytes,
+  Unsupported, WORKSPACE, absPath, bashOrSh, checkUrl, cloudFor, createBox, inDir, localFs, modeBits, mustRun, octalMode, setDefaultCloud, shq, sizeFor, sleep, statEntry, symbolicMode, toBytes,
 } from './common.js';
 
 export { Unsupported, setDefaultCloud };
@@ -444,15 +444,17 @@ export class Process {
 
 // --- files ---------------------------------------------------------------------------------
 
-function fileInfo(e: { name?: string; path: string; type?: string; size?: number; mode?: string; mod_time?: string }): FileInfo {
+function fileInfo(e: CloudFileInfo): FileInfo {
+  const bits = modeBits(e.mode);
   return {
     name: e.name ?? e.path.split('/').pop() ?? '',
     path: e.path,
     isDir: e.type === 'dir',
     size: e.size ?? 0,
     modTime: e.mod_time ?? '',
-    mode: e.mode ?? '',
-    permissions: e.mode ?? '',
+    // As Daytona's toolbox: mode is ls -l style, permissions octal.
+    mode: symbolicMode(bits, e.type),
+    permissions: octalMode(bits),
     owner: '',
     group: '',
   };

@@ -39,6 +39,7 @@ import {
 import { EXEC_LIMIT_S, Kosa8Cloud } from '../cloud.js';
 import type { CloudCreateOptions, CloudExecResult, CloudFileInfo, CloudSandbox, CloudSandboxInfo, Kosa8CloudOptions } from '../cloud.js';
 import type { CloudBackgroundExec } from '../cloud-features.js';
+import { modeBits, symbolicMode } from './common.js';
 
 /** The E2B JS SDK version this module follows. */
 export const MIRRORS = { e2b: '2.x' } as const;
@@ -203,8 +204,8 @@ export interface CommandStartOpts {
   cwd?: string;
   user?: string;
   /** Called with output as the command prints it. */
-  onStdout?: (data: string) => void | Promise<void>;
-  onStderr?: (data: string) => void | Promise<void>;
+  onStdout?: (data: string) => unknown;
+  onStderr?: (data: string) => unknown;
   /** Stop the command after this long (default 60 000 ms; 0 means no limit). */
   timeoutMs?: number;
   requestTimeoutMs?: number;
@@ -253,8 +254,8 @@ function entry(e: CloudFileInfo): EntryInfo {
     name: e.name ?? e.path.split('/').pop() ?? '',
     path: e.path,
     size: e.size ?? 0,
-    mode: 0,
-    permissions: e.mode ?? '',
+    mode: modeBits(e.mode),
+    permissions: symbolicMode(modeBits(e.mode), e.type),
   };
   if (e.type === 'dir' || e.type === 'file') out.type = e.type as 'file' | 'dir';
   const t = toDate(e.mod_time);
@@ -294,13 +295,13 @@ export class CommandHandle {
 
   private seen = 0;
   private out: string[] = [];
-  private listeners: Array<(d: string) => void | Promise<void>> = [];
+  private listeners: Array<(d: string) => unknown> = [];
   private following?: Promise<void>;
   private finalExit: number | null | undefined;
   private failure: unknown;
 
   /** @internal */
-  constructor(private readonly job: CloudBackgroundExec, onStdout?: (d: string) => void | Promise<void>) {
+  constructor(private readonly job: CloudBackgroundExec, onStdout?: (d: string) => unknown) {
     if (onStdout) {
       this.listeners.push(onStdout);
       // E2B calls run()'s callbacks as output arrives, without wait().
@@ -345,7 +346,7 @@ export class CommandHandle {
   }
 
   /** Until it exits; `onStdout` gets its output as it appears (what it printed before this call first). */
-  async wait(opts: { onStdout?: (d: string) => void | Promise<void>; onStderr?: (d: string) => void | Promise<void> } = {}): Promise<CommandResult> {
+  async wait(opts: { onStdout?: (d: string) => unknown; onStderr?: (d: string) => unknown } = {}): Promise<CommandResult> {
     return e2b(async () => {
       if (opts.onStdout) {
         const before = this.stdout;
@@ -435,7 +436,7 @@ export class Commands {
   }
 
   /** A background command by its id (`bg_…`). */
-  async connect(pid: string, opts: { onStdout?: (d: string) => void | Promise<void> } = {}): Promise<CommandHandle> {
+  async connect(pid: string, opts: { onStdout?: (d: string) => unknown } = {}): Promise<CommandHandle> {
     return e2b(async () => new CommandHandle(await this.box.getExec(String(pid)), opts.onStdout));
   }
 

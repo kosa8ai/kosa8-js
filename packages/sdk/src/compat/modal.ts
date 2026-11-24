@@ -24,10 +24,10 @@
  */
 
 import { Kosa8Error, Kosa8NotFoundError, Kosa8ExecTimeoutError, Kosa8TimeoutError, Kosa8BadRequestError, Kosa8ConflictError, Kosa8RateLimitError } from '../errors.js';
-import type { CloudCreateOptions, CloudExecStream, CloudSandbox, Kosa8Cloud } from '../cloud.js';
+import type { CloudCreateOptions, CloudExecStream, CloudFileInfo, CloudSandbox, Kosa8Cloud } from '../cloud.js';
 import type { CloudBackgroundExec } from '../cloud-features.js';
 import {
-  Unsupported, absPath, bashOrSh, checkUrl, cloudFor, createBox, inDir, localFs, setDefaultCloud, sizeFor, statEntry, toBytes,
+  Unsupported, absPath, bashOrSh, checkUrl, cloudFor, createBox, inDir, localFs, modeBits, setDefaultCloud, sizeFor, statEntry, symbolicMode, toBytes,
 } from './common.js';
 
 export { Unsupported, setDefaultCloud };
@@ -392,15 +392,16 @@ export interface FileInfo {
   readonly modifiedTime: number;
 }
 
-function fileInfo(e: { name?: string; path: string; type?: string; size?: number; mode?: string; mod_time?: string }): FileInfo {
+function fileInfo(e: CloudFileInfo): FileInfo {
   const t = e.mod_time ? Date.parse(e.mod_time) : NaN;
+  const bits = modeBits(e.mode);
   return {
     name: e.name ?? e.path.split('/').pop() ?? '',
     path: e.path,
-    type: e.type === 'dir' ? 'directory' : 'file',
+    type: e.type === 'dir' ? 'directory' : e.type === 'symlink' ? 'symlink' : 'file',
     size: e.size ?? 0,
-    mode: 0,
-    permissions: e.mode ?? '',
+    mode: bits,
+    permissions: symbolicMode(bits, e.type),
     owner: '',
     group: '',
     modifiedTime: Number.isNaN(t) ? 0 : Math.floor(t / 1000),
