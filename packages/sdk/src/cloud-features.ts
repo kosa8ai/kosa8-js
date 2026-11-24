@@ -16,7 +16,10 @@ type Json = Record<string, unknown>;
 /** @internal What the resources here need from `Kosa8Cloud`. */
 export interface CloudRequester {
   request<T = Json>(method: string, path: string, body?: unknown, opts?: { idempotencyKey?: string; autoIdempotencyKey?: boolean; signal?: AbortSignal }): Promise<T>;
-  requestBytes(method: string, path: string, bytes?: Uint8Array): Promise<Uint8Array>;
+  requestBytes(
+    method: string, path: string, bytes?: Uint8Array,
+    opts?: { headers?: Record<string, string>; signal?: AbortSignal; repeatable?: boolean },
+  ): Promise<Uint8Array>;
 }
 
 const enc = encodeURIComponent;

@@ -100,6 +100,8 @@ export type {
   CloudListOptions,
   CloudSandboxPage,
   CloudFileInfo,
+  CloudFileReadOptions,
+  CloudFileWriteOptions,
   CloudCheckpoint,
   CloudRewindResult,
   CloudPort,
