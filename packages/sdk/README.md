@@ -310,6 +310,20 @@ await box.push({ branch: 'fix/flaky' }); // push without a PR
 
 Errors: `Kosa8GitHubNotConnectedError` (`connectUrl`), `Kosa8GitHubPermissionsError` (`missingPermissions`, `settingsUrl`), `Kosa8NoChangesError`, `Kosa8RepoNotFoundError`, `Kosa8GitHubUnavailableError` (`retryAfter`).
 
+### Autopilot bots
+
+Bots watch sandboxes, spend and agents and act (sleep an idle sandbox, block a host, post a digest). A new bot is a draft; a person turns it on, and risky (T3) steps wait for a person's approval.
+
+```ts
+const plan = await cloud.bots.plan({ template: 'spend-guard', replay: true }); // what it would do; saves nothing
+const bot = await cloud.bots.create({ template: 'spend-guard', budgetUsd: 5 }); // a draft
+const run = await cloud.bots.run(bot.id);                                       // a dry run by default; never billed
+await cloud.bots.pauseAll();                                                    // any admin key can stop every bot
+const waiting = await cloud.approvals.list();                                   // pending T3 steps
+```
+
+An agent never approves its own action: `cloud.approvals.approve/reject`, `cloud.bots.enable` and `resumeAll` need a person's key and throw `Kosa8HumanApprovalRequiredError` (403 `human_required`) otherwise. A person approves in the web app, desktop, CLI or Slack.
+
 ### Pipelines
 
 ```ts

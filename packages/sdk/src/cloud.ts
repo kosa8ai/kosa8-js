@@ -45,6 +45,7 @@ import { CloudJobs } from './jobs.js';
 import { CloudApiKeys, CloudAudit, CloudBenchmarks, CloudRl, CloudWebhooks } from './cloud-org.js';
 import { CloudAi, CloudBrowsers } from './cloud-browser.js';
 import { CloudRuns, runOnce } from './cloud-run.js';
+import { CloudApprovals, CloudBots } from './cloud-bots.js';
 import { CloudGitHub, pullRequestBody, pushBody, repoBody, sandboxRepo } from './cloud-github.js';
 import type {
   CloudPullRequest, CloudPullRequestOptions, CloudPushOptions, CloudPushResult, CloudRepoSpec, CloudSandboxRepo,
@@ -1017,6 +1018,10 @@ export class Kosa8Cloud {
   readonly runs: CloudRuns;
   /** The org's connected GitHub: status, repos, branches. */
   readonly github: CloudGitHub;
+  /** Autopilot bots: templates, plans, drafts, runs; a person enables them. */
+  readonly bots: CloudBots;
+  /** Autopilot approvals: T3 steps waiting for a person (deciding needs a person's key). */
+  readonly approvals: CloudApprovals;
   /** The retry policy every request uses unless it says otherwise. */
   readonly retry: RetryPolicy;
   /** @internal The run an `rl.Run` set while it is open: its sandboxes default to these. */
@@ -1060,6 +1065,8 @@ export class Kosa8Cloud {
     this.rl = new CloudRl(this);
     this.runs = new CloudRuns(this);
     this.github = new CloudGitHub(this);
+    this.bots = new CloudBots(this);
+    this.approvals = new CloudApprovals(this);
     this.retry = toPolicy(options.retry);
   }
 

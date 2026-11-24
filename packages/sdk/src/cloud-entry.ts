@@ -29,6 +29,7 @@ export {
   Kosa8NoChangesError,
   Kosa8RepoNotFoundError,
   Kosa8GitHubUnavailableError,
+  Kosa8HumanApprovalRequiredError,
   errorFromResponse,
   FAILURE_CLASSES,
   failureOf,
@@ -50,6 +51,25 @@ export type {
   CloudPullRequestOptions,
   CloudPullRequest,
 } from './cloud-github.js';
+export { CloudBots, CloudApprovals, MAX_BOT_SENTENCE } from './cloud-bots.js';
+export type {
+  CloudBot,
+  CloudBotState,
+  CloudBotList,
+  CloudBotSpec,
+  CloudBotTrigger,
+  CloudBotAction,
+  CloudBotPlan,
+  CloudBotReplay,
+  CloudBotTemplate,
+  CloudBotRun,
+  CloudBotStep,
+  CloudApproval,
+  CloudBotSource,
+  CloudBotPlanOptions,
+  CloudBotCreateOptions,
+  CloudBotUpdateOptions,
+} from './cloud-bots.js';
 export type { RetryPolicyOptions, RetryCallOptions } from './retry.js';
 export type * from './types.js';
 export {

@@ -312,6 +312,14 @@ export class Kosa8ApprovalRequiredError extends Kosa8PolicyError {
   }
 }
 
+/**
+ * 403 human_required: only a person may do this (decide an approval, enable
+ * a bot, resume all bots). Capability tokens, MCP and org keys bound to no
+ * member are refused. An agent never approves its own action: a person
+ * approves in the web app (app.kosa8.com/app#autopilot), desktop, CLI or Slack.
+ */
+export class Kosa8HumanApprovalRequiredError extends Kosa8PolicyError {}
+
 /** 404: no such sandbox, snapshot, container, ... */
 export class Kosa8NotFoundError extends Kosa8ApiError {}
 
@@ -415,6 +423,7 @@ export function errorFromResponse(
     return new Kosa8ApprovalRequiredError(message, approval, opts);
   }
   const code = ctx.code ?? (typeof body === 'object' && body !== null ? (body as Record<string, unknown>).code : undefined);
+  if (status === 403 && code === 'human_required') return new Kosa8HumanApprovalRequiredError(message, opts);
   if (status === 409 && code === 'github_not_connected') return new Kosa8GitHubNotConnectedError(message, opts);
   if (status === 409 && code === 'github_permissions') return new Kosa8GitHubPermissionsError(message, opts);
   if (status === 409 && code === 'no_changes') return new Kosa8NoChangesError(message, opts);
