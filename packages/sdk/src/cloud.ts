@@ -199,7 +199,7 @@ export interface CloudCreateOptions {
    * org's setting.
    */
   template?: string;
-  /** Region id, such as eu-hel1. Defaults to the org's setting (any region). */
+  /** Region id: us-ash1 (Ashburn, VA; the one live region), or the area alone (us). Defaults to the org's default_region, else us-ash1. */
   region?: string;
   /** Idle seconds before the sandbox sleeps (0..604800); 0 never. Defaults to the org's setting. */
   sleepAfterS?: number;

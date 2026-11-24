@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Errors: every HTTP error (`Kosa8ApiError` and subclasses) has the cloud's contract fields as getters: `upgradeUrl`, `agentMessage` (also on a 429 `quota_exceeded`), `requestUrl`, and for a 402 `plan_limit` `limitName`, `limit`, `used`, `plan`, `nextPlan`, `feature`, `options`, `packUrl`. `spend_cap`, `starter_limit` and `new_account_limit` are quota codes.
+- Files: `files.read(path, { range })` sends `Range`; `files.write(path, data, { offset, append, mode })`; both take a `signal`. An append is never re-sent after a 5xx.
+- `@kosa8/sdk/cloud`: the cloud client with no Node built-ins, for browsers, Workers, Deno and Bun.
+- Serverless runs: `cloud.run({ code | command, ... })` (`POST /v1/run`), `cloud.runs.list/get/share`, `runFileBytes`. `box.direct()` (`POST …/direct`).
+- `CloudFileInfo.mode` is a number (permission bits), as the API sends it; the E2B, Daytona and Modal shims report mode and permissions as those SDKs do. E2B `onStdout`/`onStderr` accept callbacks returning any value.
+- RL: rollout flushes carry an Idempotency-Key, reused when a failed chunk is re-sent, so rows are never stored twice.
+
 ## 0.7.0 - 2026-11-23
 
 - Retries of creates, batches, forks, grades and job submits use a new SDK-made `Idempotency-Key` after a 5xx (502 `host_failed`, 503 `no_capacity` / `host_restarting` / `host_unavailable`, 504), so each retry of a server-side failure is a new attempt. The key is still kept after no answer (the first try may have created the sandbox), a 429 and a 409 `idempotency_in_progress` / `template_building`. A key you pass as `idempotencyKey` is never changed. Retry-After is honoured as before.
