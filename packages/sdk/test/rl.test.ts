@@ -103,6 +103,24 @@ describe('rl.Run', () => {
     await run.finish();
   });
 
+  it('a flush that failed is sent again as the same chunk with the same Idempotency-Key, so it is never stored twice', async () => {
+    const f = fakeRl({ rolloutsFail: 1 });
+    const run = await rl.RlRun.start(f.cloud, { name: 'r', ...quiet });
+    await run.record([{ reward: 1 }, { reward: 0 }]);
+    await expect(run.flush()).rejects.toThrow(/no/);
+    await run.record({ reward: 0.5 });
+    expect(await run.flush()).toBe(3);
+    const posts = f.seen.filter((s) => s.method === 'POST' && s.url.pathname === '/v1/rl/runs/run_1/rollouts');
+    expect(posts).toHaveLength(3);
+    const k = posts.map((s) => s.headers['Idempotency-Key']);
+    expect(k[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(k[1]).toBe(k[0]);
+    expect((posts[1]!.body as { rollouts: unknown[] }).rollouts).toEqual((posts[0]!.body as { rollouts: unknown[] }).rollouts);
+    expect(k[2]).not.toBe(k[0]);
+    expect((posts[2]!.body as { rollouts: unknown[] }).rollouts).toHaveLength(1);
+    await run.finish();
+  });
+
   it('withRun marks the run failed when fn throws, and drains', async () => {
     const f = fakeRl();
     await expect(rl.withRun(f.cloud, { name: 'r', ...quiet }, async () => {

@@ -4,6 +4,7 @@
 
 import { ensureDisposeSymbols } from '../dispose.js';
 import { Kosa8Error } from '../errors.js';
+import { newIdempotencyKey } from '../cloud.js';
 import type { CloudDrainResult, CloudSandbox, Kosa8Cloud } from '../cloud.js';
 import { DEFAULT_LEASE_S, Lease } from './lease.js';
 import { mapRollouts, rolloutRow } from './rollouts.js';
@@ -126,6 +127,8 @@ export class RlRun implements RunLike {
   recorded = 0;
   status: string | undefined;
   private buf: Record<string, unknown>[] = [];
+  /** The first rows of buf that a flush sent and lost: sent again as one chunk with the same key. */
+  private unsent?: { size: number; key: string };
   private flushing: Promise<number> | undefined;
   private leaseObj: Lease | undefined;
   private prevDefaults: Kosa8Cloud['_runDefaults'];
@@ -284,14 +287,21 @@ export class RlRun implements RunLike {
   private async flushNow(): Promise<number> {
     let sent = 0;
     while (this.buf.length) {
-      const chunk = this.buf.splice(0, MAX_ROWS_PER_CALL);
+      // A chunk that failed is sent again as it was, with its Idempotency-Key:
+      // if the first try was stored after all (an answer lost on the way),
+      // the server replays it rather than storing the rows twice.
+      const again = this.unsent;
+      const chunk = this.buf.splice(0, again ? again.size : MAX_ROWS_PER_CALL);
+      const key = again ? again.key : newIdempotencyKey();
       try {
-        const r = await this.cloud.request<{ recorded?: number }>('POST', this.path('/rollouts'), { rollouts: chunk });
+        const r = await this.cloud.request<{ recorded?: number }>('POST', this.path('/rollouts'), { rollouts: chunk }, { idempotencyKey: key });
+        this.unsent = undefined;
         const n = r?.recorded ?? chunk.length;
         sent += n;
         this.recorded += n;
       } catch (e) {
         this.buf.unshift(...chunk);
+        this.unsent = { size: chunk.length, key };
         throw e;
       }
     }
