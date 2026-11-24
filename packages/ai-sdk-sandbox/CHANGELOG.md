@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 - 2026-11-23
 
-- Accepts @kosa8/sdk 0.6 and 0.7 (`^0.4.1 || ^0.5.0 || ^0.6.0 || ^0.7.0`); the published 0.2.1 takes only `^0.4.1 || ^0.5.0`, so it pairs @kosa8/sdk 0.7 with a second 0.5 copy.
+- Accepts @kosa8/sdk 0.6, 0.7 and 0.8 (`^0.4.1 || ^0.5.0 || ^0.6.0 || ^0.7.0 || ^0.8.0`), so a project on @kosa8/sdk 0.8 shares one copy; the published 0.2.1 takes only `^0.4.1 || ^0.5.0`, so it paired a newer @kosa8/sdk with a second 0.5 copy.
 
 ## 0.2.1
 

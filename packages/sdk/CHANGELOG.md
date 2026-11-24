@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-11-23
 
 - Errors: every HTTP error (`Kosa8ApiError` and subclasses) has the cloud's contract fields as getters: `upgradeUrl`, `agentMessage` (also on a 429 `quota_exceeded`), `requestUrl`, and for a 402 `plan_limit` `limitName`, `limit`, `used`, `plan`, `nextPlan`, `feature`, `options`, `packUrl`. `spend_cap`, `starter_limit` and `new_account_limit` are quota codes.
 - Files: `files.read(path, { range })` sends `Range`; `files.write(path, data, { offset, append, mode })`; both take a `signal`. An append is never re-sent after a 5xx.

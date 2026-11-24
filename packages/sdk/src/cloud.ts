@@ -78,7 +78,7 @@ ensureDisposeSymbols();
 export const DEFAULT_CLOUD_URL = 'https://api.kosa8.com';
 
 /** This package's version (kept equal to package.json's by a test). */
-export const SDK_VERSION = '0.7.0';
+export const SDK_VERSION = '0.8.0';
 /** The User-Agent the cloud client sends outside a browser. */
 export const USER_AGENT = `kosa8-js/${SDK_VERSION}`;
 export const CLOUD_KEY_PREFIX = 'k8c_live_';

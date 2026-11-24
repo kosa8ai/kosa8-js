@@ -65,8 +65,8 @@ describe('kosa8 Cloud defaults', () => {
     expect(c.baseUrl).toBe('https://api.kosa8.com');
   });
 
-  it('is version 0.7.0', () => {
-    expect(pkg.version).toBe('0.7.0');
+  it('is version 0.8.0', () => {
+    expect(pkg.version).toBe('0.8.0');
   });
 });
 
