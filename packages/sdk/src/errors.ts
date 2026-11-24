@@ -85,7 +85,7 @@ const INFRA_CODES = new Set([
 const RATE_CODES = new Set(['rate_limited', 'slow_down', 'too_soon']);
 const QUOTA_CODES = new Set([
   'quota_exceeded', 'running_limit', 'plan_required', 'plan_limit', 'plan_feature', 'payment_required', 'payment_declined',
-  'spending_cap_reached', 'snapshot_limit', 'org_frozen', 'org_suspended', 'too_many_runs',
+  'spending_cap_reached', 'spend_cap', 'starter_limit', 'new_account_limit', 'snapshot_limit', 'org_frozen', 'org_suspended', 'too_many_runs',
 ]);
 
 /**
@@ -194,8 +194,85 @@ export class Kosa8ConnectionError extends Kosa8Error {}
  */
 export class Kosa8TimeoutError extends Kosa8ConnectionError {}
 
-/** The daemon answered with an HTTP error. */
-export class Kosa8ApiError extends Kosa8Error {}
+function bodyNumber(body: unknown, key: string): number | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const v = (body as Record<string, unknown>)[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** One way past a 402 plan_limit: an add-on pack or the next plan, cheaper first. */
+export interface Kosa8LimitOption {
+  kind: 'pack' | 'upgrade' | string;
+  addon?: string;
+  plan?: string;
+  label?: string;
+  monthly_usd?: number;
+  url?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The daemon (or kosa8 Cloud) answered with an HTTP error. kosa8 Cloud's
+ * error fields (the OpenAPI `Error` schema) are read from `body`: null when
+ * the answer did not carry them.
+ */
+export class Kosa8ApiError extends Kosa8Error {
+  /** 402: where the person adds a payment method or credit, or raises the cap. */
+  get upgradeUrl(): string | null {
+    return bodyString(this.body, 'upgrade_url');
+  }
+
+  /** 402 and 429 quota_exceeded: a sentence an AI agent should relay to its person word for word. */
+  get agentMessage(): string | null {
+    return bodyString(this.body, 'agent_message');
+  }
+
+  /** 429 quota_exceeded: where to ask for a higher limit (POST /v1/limits/request). */
+  get requestUrl(): string | null {
+    return bodyString(this.body, 'request_url');
+  }
+
+  /** 402 plan_limit: which limit (sandbox_hours, running, size, persistent or snapshots). */
+  get limitName(): string | null {
+    return bodyString(this.body, 'limit_name');
+  }
+
+  /** 402 plan_limit: the plan's limit. */
+  get limit(): number | null {
+    return bodyNumber(this.body, 'limit');
+  }
+
+  /** 402 plan_limit: what the organization has used (for size, the vCPU asked for). */
+  get used(): number | null {
+    return bodyNumber(this.body, 'used');
+  }
+
+  /** 402 plan_limit and plan_feature: the organization's plan. */
+  get plan(): string | null {
+    return bodyString(this.body, 'plan');
+  }
+
+  /** 402 plan_limit and plan_feature: the first plan that includes more; null when none (contact sales) or absent. */
+  get nextPlan(): string | null {
+    return bodyString(this.body, 'next_plan');
+  }
+
+  /** 402 plan_feature: the feature the plan lacks. */
+  get feature(): string | null {
+    return bodyString(this.body, 'feature');
+  }
+
+  /** 402 plan_limit: the ways past the limit, cheaper a month first (offer them in this order); [] when none. */
+  get options(): Kosa8LimitOption[] {
+    const v = typeof this.body === 'object' && this.body !== null ? (this.body as Record<string, unknown>).options : undefined;
+    return Array.isArray(v) ? (v.filter((o) => typeof o === 'object' && o !== null) as Kosa8LimitOption[]) : [];
+  }
+
+  /** 402 plan_limit: where to add the pack for this limit, when one is sold. */
+  get packUrl(): string | null {
+    return bodyString(this.body, 'pack_url');
+  }
+}
 
 /** 400: the request was malformed or a value was refused (an egress policy, say). */
 export class Kosa8BadRequestError extends Kosa8ApiError {}
@@ -252,17 +329,7 @@ function bodyString(body: unknown, key: string): string | null {
  * kosa8 Cloud refused new work until it is paid for (402). `code` says why:
  * payment_required, spending_cap_reached, price_not_accepted, ...
  */
-export class Kosa8PaymentRequiredError extends Kosa8ApiError {
-  /** Where the person adds a payment method or credit; null when the answer had none. */
-  get upgradeUrl(): string | null {
-    return bodyString(this.body, 'upgrade_url');
-  }
-
-  /** A sentence an AI agent should relay to its person word for word; null when absent. */
-  get agentMessage(): string | null {
-    return bodyString(this.body, 'agent_message');
-  }
-}
+export class Kosa8PaymentRequiredError extends Kosa8ApiError {}
 
 /** Too many requests or a quota reached (429). */
 export class Kosa8RateLimitError extends Kosa8ApiError {}
