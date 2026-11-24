@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 - 2026-11-24
 
-- `repo` on `createKosa8CloudSandboxSession` / `createKosa8CloudSandbox`: start in a checkout of a repo from the org's connected GitHub (`"owner/name[@ref]"` or `{ name, ref, path, depth }`); the checkout is the default working directory. `session.sandbox.pullRequest()` sends changes back. Cloning needs an @kosa8/sdk that sends `repo` (the next release). `repoWorkingDirectory(spec)` and the `Kosa8CloudRepo` type are exported.
+- Accepts @kosa8/sdk 0.9 (`^0.4.1 || ^0.5.0 || ^0.6.0 || ^0.7.0 || ^0.8.0 || ^0.9.0`); @kosa8/sdk 0.9.0 is the first release that sends `repo`.
+- `repo` on `createKosa8CloudSandboxSession` / `createKosa8CloudSandbox`: start in a checkout of a repo from the org's connected GitHub (`"owner/name[@ref]"` or `{ name, ref, path, depth }`); the checkout is the default working directory. `session.sandbox.pullRequest()` sends changes back. Cloning needs @kosa8/sdk 0.9.0 or later. `repoWorkingDirectory(spec)` and the `Kosa8CloudRepo` type are exported.
 
 ## 0.2.2 - 2026-11-23
 
