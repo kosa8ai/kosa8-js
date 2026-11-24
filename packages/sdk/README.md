@@ -96,6 +96,7 @@ With no `template`, a sandbox starts from the org's default, `base`:
 | `box.waitUntilRunning({ timeoutMs? })` | polls `GET` while `creating` |
 | `box.update({ ttlS?, deleteAfter?, sleepAfterS? })` → `{ sandbox, notes }` | `PATCH /v1/sandboxes/{id}`; `{ ttlS: null }` clears the lifetime |
 | `box.sleep()`, `box.wake()`, `box.refresh()`, `box.delete()` | `POST …/sleep`, `POST …/wake`, `GET`, `DELETE` |
+| `box.direct()` → `{ exec_url, files_url?, token, expires_at }` | `POST …/direct`: send commands (and big files) to the host straight |
 | `box.dispose()`, `await using box = …` | `DELETE` (a sandbox gone already is fine) |
 | `box.heartbeat({ extendS? })`, `box.grade(cmd, opts)` | see [RL training and fan-out](#rl-training-and-fan-out) |
 
@@ -324,6 +325,7 @@ console.log(out.ok, out.result); // true { hello: 'kosa8' }
 | --- | --- |
 | `cloud.me()`, `cloud.usage()`, `cloud.usageInsights()` | the org; this month's bill; spend day by day, top sandboxes, projected month end |
 | `cloud.pricing()`, `cloud.limits()`, `cloud.requestLimit(maxRunning, reason?)` | the rate card; the running-sandbox limit; ask for more |
+| `cloud.run({ code \| command, language?, files?, env?, size?, timeoutS?, outputs?, share? })` → `CloudRun`; `cloud.runs.list()`, `get(id)`, `share(id, { public })` | `POST /v1/run` (a fresh sandbox, one call, deleted after; `runFileBytes(file)` decodes an output), `/v1/runs` |
 | `cloud.lineage()`, `cloud.checkpoints()`, `cloud.images()` | the fork tree; every sandbox's checkpoints; the images behind the templates |
 | `cloud.apiKeys.list()` / `create({ name, scopes?, expiresInS? })` / `revoke(id)` / `rotate(id, { graceS? })` | `/v1/api-keys`; a new key's `secret` is shown once |
 | `cloud.webhooks.list()` / `create(url, { events?, description? })` / `delete(id)` / `deliveries(id)` / `test(id)` | `/v1/webhooks`; the `whsec_` secret is shown once |

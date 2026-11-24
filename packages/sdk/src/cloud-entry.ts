@@ -65,6 +65,7 @@ export type {
   CloudFileInfo,
   CloudFileReadOptions,
   CloudFileWriteOptions,
+  CloudDirectAccess,
   CloudCheckpoint,
   CloudRewindResult,
   CloudPort,
@@ -203,3 +204,5 @@ export type { ForkMapOptions, ForkResult } from './forkmap.js';
 export * as rl from './rl/index.js';
 export { RlRun, withRun, Lease, lease, mapRollouts, Rollouts, DEFAULT_MASK, DEFAULT_LEASE_S } from './rl/index.js';
 export type { RlRunInfo, RlRunOptions, RolloutRow, RolloutFilters, LeaseOptions, RolloutResult, RolloutBase, MapRolloutsOptions } from './rl/index.js';
+export { CloudRuns, MAX_RUN_TIMEOUT_S, runFileBytes } from './cloud-run.js';
+export type { CloudRun, CloudRunOptions, CloudRunFile } from './cloud-run.js';
