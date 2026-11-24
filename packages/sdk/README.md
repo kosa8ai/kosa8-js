@@ -291,6 +291,25 @@ const openai = new OpenAI({ baseURL: cloud.ai.gatewayUrl('openai'), apiKey: proc
 // cloud.ai.gatewayUrl('anthropic') for Anthropic's SDK (it appends v1/messages)
 ```
 
+### GitHub repos
+
+Connect GitHub once (an admin, at app.kosa8.com Settings → GitHub or `kosa8 github connect`), then start from a repo and send the changes back as a pull request. kosa8 mints a GitHub token for that one repo, for that one operation, valid at most an hour; it never enters the sandbox and every use is in the audit log.
+
+```ts
+const box = await cloud.sandboxes.create({ repo: 'acme/api@main' }); // cloned into /workspace/api
+await box.exec('cd /workspace/api && npm ci && npm test');
+const pr = await box.pullRequest({ title: 'Fix flaky test' });        // a draft PR; pr.url
+const run = await cloud.run({ command: 'pytest -q', repo: 'acme/ml' }); // runs in the checkout
+
+await cloud.github.status();             // connected? installations, missing permissions
+await cloud.github.repos('api');         // repos the org can use, recent first
+await cloud.github.branches('acme/api'); // first 100 branches
+await box.repo();                        // { full_name, ref, sha, status, changes }
+await box.push({ branch: 'fix/flaky' }); // push without a PR
+```
+
+Errors: `Kosa8GitHubNotConnectedError` (`connectUrl`), `Kosa8GitHubPermissionsError` (`missingPermissions`, `settingsUrl`), `Kosa8NoChangesError`, `Kosa8RepoNotFoundError`, `Kosa8GitHubUnavailableError` (`retryAfter`).
+
 ### Pipelines
 
 ```ts

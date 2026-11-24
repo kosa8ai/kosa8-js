@@ -13,6 +13,7 @@ import {
   createKosa8CloudSandboxSession,
   createKosa8CloudSandboxSessionFromSandbox,
   resumeKosa8CloudSandboxSession,
+  repoWorkingDirectory,
   sandboxNameForSession,
   toCloudEgress,
 } from '../src/index.js';
@@ -68,6 +69,16 @@ describe('createKosa8CloudSandboxSession', () => {
     expect((await s.run({ command: 'pwd' })).stdout).toBe('/workspace/proj\n');
     await expect(createKosa8CloudSandboxSession({ ...opts(), setupCommands: ['exit 3'] })).rejects.toThrow(/setupCommand failed \(exit 3\)/);
     expect(fake.sandboxes.get('sbx_2')!.state).toBe('deleted');
+  });
+
+  it('starts from a GitHub repo: sends repo and works in its checkout', async () => {
+    const s = await createKosa8CloudSandboxSession({ ...opts(), repo: 'acme/api@main' });
+    expect((fake.calls('POST', '/v1/sandboxes')[0]!.body as Record<string, unknown>).repo).toBe('acme/api@main');
+    expect(s.defaultWorkingDirectory).toBe('/workspace/api');
+    const t = await createKosa8CloudSandboxSession({ ...opts(), repo: { name: 'acme/web', path: '/workspace/w' } });
+    expect((fake.calls('POST', '/v1/sandboxes')[1]!.body as Record<string, unknown>).repo).toEqual({ name: 'acme/web', path: '/workspace/w' });
+    expect(t.defaultWorkingDirectory).toBe('/workspace/w');
+    expect(repoWorkingDirectory({ name: 'acme/x' })).toBe('/workspace/x');
   });
 
   it('rejects networkPolicy with egress, and an already aborted signal before any request', async () => {

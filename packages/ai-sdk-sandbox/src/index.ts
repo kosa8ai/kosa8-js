@@ -29,12 +29,14 @@ export {
   createKosa8CloudSandbox,
   Kosa8CloudSandboxProvider,
   cloudTemplateSnapshotName,
+  repoWorkingDirectory,
 } from './kosa8-cloud-sandbox.js';
 export type {
   Kosa8CloudSandboxSettings,
   Kosa8CloudCreateSettings,
   Kosa8CloudSandboxSessionCreateOptions,
   Kosa8CloudSandboxSessionResumeOptions,
+  Kosa8CloudRepo,
 } from './kosa8-cloud-sandbox.js';
 export {
   Kosa8CloudSandboxSession,

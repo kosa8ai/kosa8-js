@@ -7,6 +7,8 @@
  */
 
 import { Kosa8Error } from './errors.js';
+import { repoBody } from './cloud-github.js';
+import type { CloudRepoSpec, CloudSandboxRepo } from './cloud-github.js';
 
 type Json = Record<string, unknown>;
 
@@ -40,6 +42,12 @@ export interface CloudRunOptions {
   outputs?: string[];
   /** true: a public read-only run card. `{ public, code }` also shows the code. */
   share?: boolean | { public?: boolean; code?: boolean };
+  /**
+   * Run in a checkout of a repo of the org's connected GitHub:
+   * `"owner/name"`, `"owner/name@ref"` or `{ name, ref, path, depth }`. The
+   * command runs in the checkout (/workspace/<name>).
+   */
+  repo?: CloudRepoSpec;
   signal?: AbortSignal;
 }
 
@@ -72,6 +80,8 @@ export interface CloudRun {
   template?: string;
   sandbox_id?: string | null;
   view_url?: string;
+  /** The repo it ran in, when `repo` was given. */
+  repo?: CloudSandboxRepo | null;
   error?: string | null;
   hint?: string;
   [key: string]: unknown;
@@ -108,6 +118,7 @@ export function runBody(opts: CloudRunOptions): Json {
   }
   if (opts.outputs !== undefined) body.outputs = opts.outputs;
   if (opts.share !== undefined) body.share = opts.share;
+  if (opts.repo !== undefined) body.repo = repoBody(opts.repo);
   return body;
 }
 
