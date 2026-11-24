@@ -74,6 +74,7 @@ describe('modal shim', () => {
     await sb.filesystem.writeText('hello', 'a.txt');
     expect(await sb.filesystem.readText('/workspace/a.txt')).toBe('hello');
     expect((await sb.filesystem.listFiles('.'))).toEqual([]); // "." is /workspace/. → nothing directly under that key
+    expect((await sb.filesystem.listFiles('/workspace'))[0]).toMatchObject({ name: 'a.txt', type: 'file', mode: 0o644, permissions: '-rw-r--r--' });
     await expect(sb.filesystem.readText('nope')).rejects.toBeInstanceOf(SandboxFilesystemNotFoundError);
   });
 

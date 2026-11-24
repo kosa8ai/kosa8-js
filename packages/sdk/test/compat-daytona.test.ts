@@ -84,7 +84,7 @@ describe('daytona shim', () => {
     expect(f.files.has('/workspace/data/a.txt')).toBe(true);
     expect((await sb.fs.downloadFile('data/a.txt')).toString()).toBe('abc');
     const ls = await sb.fs.listFiles('data');
-    expect(ls[0]).toMatchObject({ name: 'a.txt', isDir: false, size: 3 });
+    expect(ls[0]).toMatchObject({ name: 'a.txt', isDir: false, size: 3, mode: '-rw-r--r--', permissions: '0644' });
     await sb.fs.createFolder('out', '755');
     await sb.fs.deleteFile('data/a.txt');
     expect(f.files.size).toBe(0);

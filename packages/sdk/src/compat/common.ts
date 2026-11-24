@@ -181,3 +181,29 @@ export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 export async function localFs(): Promise<typeof import('node:fs/promises')> {
   return import('node:fs/promises');
 }
+
+/**
+ * A file's permission bits from the API's `mode` (a number such as 420 for
+ * 0644); an octal string is read too. 0 when absent.
+ */
+export function modeBits(mode: unknown): number {
+  if (typeof mode === 'number' && Number.isFinite(mode)) return mode & 0o7777;
+  if (typeof mode === 'string' && /^[0-7]{3,4}$/.test(mode)) return parseInt(mode, 8);
+  return 0;
+}
+
+/** `ls -l` style permissions, e.g. -rw-r--r-- or drwxr-xr-x. */
+export function symbolicMode(bits: number, type?: string): string {
+  const kind = type === 'dir' ? 'd' : type === 'symlink' ? 'l' : '-';
+  let out = kind;
+  for (const shift of [6, 3, 0]) {
+    const b = (bits >> shift) & 7;
+    out += (b & 4 ? 'r' : '-') + (b & 2 ? 'w' : '-') + (b & 1 ? 'x' : '-');
+  }
+  return out;
+}
+
+/** Octal permissions, e.g. 0644. */
+export function octalMode(bits: number): string {
+  return bits.toString(8).padStart(4, '0');
+}

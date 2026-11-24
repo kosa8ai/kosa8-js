@@ -106,7 +106,7 @@ export function fakeCloud(opts: FakeOpts = {}) {
     if (rest === '/files/list') {
       const dir = s.query.get('path')!;
       const out = [...files.keys()].filter((k) => k.startsWith(dir + '/') && !k.slice(dir.length + 1).includes('/'))
-        .map((k) => ({ name: k.slice(dir.length + 1), path: k, type: 'file', size: files.get(k)!.length }));
+        .map((k) => ({ name: k.slice(dir.length + 1), path: k, type: 'file', size: files.get(k)!.length, mode: 420 }));
       return j(200, { files: out });
     }
     if (rest === '/files/mkdir') return j(200, { file: { path: body.path, type: 'dir' } });
