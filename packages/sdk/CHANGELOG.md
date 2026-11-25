@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 - 2026-11-25
 
 - Lifetime contract: `onTimeout` (`'sleep'` or `'delete'`) on `cloud.sandboxes.create` and `box.update`, checked before sending; kosa8 Cloud now puts a sandbox to sleep at its timeout by default where it can sleep. `CloudSandboxInfo` gains `on_timeout`, `timeout` (`{ at, in_s, action }`), `end` (`reason`, `action`, `at`, `detail`, `message`) and `end_reason` (one of the exported `END_REASONS`: timeout, idle, user, quota, org_max_lifetime, crash, host).
 - `new Kosa8Cloud()` with no `apiKey` and no `KOSA8_API_KEY` uses the key `kosa8 login` keeps in `~/.kosa8/cloud.json` (and its `api_url` unless `KOSA8_CLOUD_URL` or `baseUrl` is set), on Node 20.16+/22.3+; `@kosa8/sdk/cloud` still has no static Node import. The "no API key" error names `kosa8 login`.

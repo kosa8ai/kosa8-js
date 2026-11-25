@@ -1,6 +1,6 @@
 {
   "name": "@kosa8/sdk",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Zero Trust cybersecurity infrastructure for AI agents: the kosa8 TypeScript SDK. Each agent in its own microVM, with checkpoint, rewind, fork and explore.",
   "license": "MIT",
   "author": "kosa8",

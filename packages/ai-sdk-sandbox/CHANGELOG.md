@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5 - 2026-11-25
+
+- Accepts @kosa8/sdk 0.11 (`... || ^0.10.0 || ^0.11.0`).
+- Local spawn and file reads: a final frame from kosa8d with neither `ok` nor an error now throws instead of passing for exit 0 (spawn) or a complete read.
+
 ## 0.2.4 - 2026-11-25
 
 - Accepts @kosa8/sdk 0.10 (`... || ^0.9.0 || ^0.10.0`), the release with Autopilot `cloud.bots` and `cloud.approvals`.
