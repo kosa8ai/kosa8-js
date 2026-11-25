@@ -98,6 +98,19 @@ export interface CloudWaitOptions {
   intervalMs?: number;
 }
 
+// What the start answered and a later read may leave out (the status read
+// carries no pid, and the API answers a field it lacks as null): a null never
+// replaces a value already known, so `id` stays usable for stop() and read().
+const KEEP_KNOWN = ['id', 'pid', 'output_path', 'exit_path'] as const;
+
+function keepKnown(prev: CloudBackgroundExecInfo, next: CloudBackgroundExecInfo | undefined): CloudBackgroundExecInfo {
+  const out = { ...prev, ...(next ?? {}) } as CloudBackgroundExecInfo;
+  const o = out as unknown as Record<string, unknown>;
+  const p = prev as unknown as Record<string, unknown>;
+  for (const k of KEEP_KNOWN) if (o[k] == null && p[k] != null) o[k] = p[k];
+  return out;
+}
+
 /**
  * A command that keeps running after `execBackground` returns. `status()`
  * reads its state and output so far; `wait()` polls until it exits.
@@ -118,8 +131,8 @@ export class CloudBackgroundExec {
     const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>(
       'GET', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/exec/${enc(this.info.id)}`,
     );
-    this.info = r.exec;
-    return r.exec;
+    this.info = keepKnown(this.info, r.exec);
+    return this.info;
   }
 
   /**
@@ -146,7 +159,7 @@ export class CloudBackgroundExec {
     const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>(
       'GET', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/exec/${enc(this.info.id)}?${q}`,
     );
-    this.info = { ...this.info, ...r.exec };
+    this.info = keepKnown(this.info, r.exec);
     return r.exec;
   }
 

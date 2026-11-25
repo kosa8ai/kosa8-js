@@ -240,10 +240,11 @@ const r = await box.runCode('import math; math.pi'); // stateful Python; charts 
 
 ```ts
 // The value goes in a request body once and never comes back; sandboxes hold a placeholder.
-await cloud.secrets.set('OPENAI', process.env.OPENAI_API_KEY!, { upstream: 'api.openai.com', pipelines: true });
-const box = await cloud.sandboxes.create({ secrets: ['OPENAI'] });
+// A name is 1-32 of a-z, 0-9 and -.
+await cloud.secrets.set('openai', process.env.OPENAI_API_KEY!, { upstream: 'api.openai.com', pipelines: true });
+const box = await cloud.sandboxes.create({ secrets: ['openai'] });
 await cloud.secrets.list();          // names and settings, never values
-await cloud.secrets.delete('OPENAI'); // { deleted, stillHeldBy }
+await cloud.secrets.delete('openai'); // { deleted, stillHeldBy }
 ```
 
 ### Browsers (headless Chromium over CDP)
@@ -327,7 +328,7 @@ An agent never approves its own action: `cloud.approvals.approve/reject`, `cloud
 ### Pipelines
 
 ```ts
-const run = await cloud.pipelines.run({ repoUrl: 'https://github.com/me/app', ref: 'main', size: '4x8', secrets: ['NPM_TOKEN'] });
+const run = await cloud.pipelines.run({ repoUrl: 'https://github.com/me/app', ref: 'main', size: '4x8', secrets: ['npm-token'] });
 const done = await cloud.pipelines.wait(run.id);  // success | failure | cancelled | error
 const logs = await cloud.pipelines.logs(run.id);  // per job; pass logs[i].next as `after` to follow
 for (const a of await cloud.pipelines.artifacts(run.id)) {
