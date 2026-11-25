@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-11-25
 
 - Autopilot bots: `cloud.bots` with `list()` (`bots`, `paused_all`, `pending_approvals`), `templates()`, `template(id)`, `plan({ template | spec, name, replay })`, `compile(text)` (at most 500 characters, checked before sending), `create({ template | spec, name, sponsor, budgetUsd, scope, notify })` (exactly one of template or spec; starts as a draft), `get`, `update`, `delete`, `enable`, `disable`, `run(id, { dryRun })` (a dry run by default), `runs(id, { limit })`, `getRun`, `cancelRun`, `undoStep(runId, key)`, `pauseAll()`, `resumeAll()`.
 - `cloud.approvals`: `list({ state, limit })` (pending by default), `get`, `approve(id, { reason, editedArgs })`, `reject(id, { reason })`. Deciding, `enable` and `resumeAll` need a person's key: a 403 `human_required` is thrown as `Kosa8HumanApprovalRequiredError` (a `Kosa8PolicyError`). An agent never approves its own action.
