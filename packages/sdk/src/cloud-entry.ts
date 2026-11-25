@@ -22,6 +22,7 @@ export {
   Kosa8CheckpointError,
   Kosa8PaymentRequiredError,
   Kosa8RateLimitError,
+  Kosa8PlanLimitError,
   Kosa8OrgFrozenError,
   Kosa8ExecTimeoutError,
   Kosa8GitHubNotConnectedError,

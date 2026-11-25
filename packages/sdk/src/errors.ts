@@ -371,7 +371,22 @@ function bodyString(body: unknown, key: string): string | null {
 export class Kosa8PaymentRequiredError extends Kosa8ApiError {}
 
 /** Too many requests or a quota reached (429). */
-export class Kosa8RateLimitError extends Kosa8ApiError {}
+export class Kosa8RateLimitError extends Kosa8ApiError {
+  static [Symbol.hasInstance](v: unknown): boolean {
+    // A plan limit answered with 429 (Kosa8PlanLimitError) still matches, for code written before it.
+    return Function.prototype[Symbol.hasInstance].call(this, v) || (this === Kosa8RateLimitError && v instanceof Kosa8PlanLimitError);
+  }
+}
+
+/**
+ * A plan limit answered with HTTP 429 (Starter's running limit, `starter_limit`):
+ * a {@link Kosa8PaymentRequiredError} like every other plan limit (pick a plan or
+ * stop a sandbox; retrying does not help), and still `instanceof Kosa8RateLimitError`.
+ */
+export class Kosa8PlanLimitError extends Kosa8PaymentRequiredError {}
+
+/** Codes that mean "pick or pay for a plan", whatever the HTTP status. */
+const PAYMENT_CODES = new Set(['starter_limit', 'plan_limit', 'plan_feature', 'plan_required']);
 
 /**
  * 423 org_frozen: the organization is frozen in the kosa8 Cloud Security
@@ -429,6 +444,9 @@ export function errorFromResponse(
   if (status === 409 && code === 'no_changes') return new Kosa8NoChangesError(message, opts);
   if (status === 404 && code === 'repo_not_found') return new Kosa8RepoNotFoundError(message, opts);
   if (code === 'github_unavailable') return new Kosa8GitHubUnavailableError(message, opts);
+  if (typeof code === 'string' && PAYMENT_CODES.has(code)) {
+    return status === 429 ? new Kosa8PlanLimitError(message, opts) : new Kosa8PaymentRequiredError(message, opts);
+  }
   switch (status) {
     case 400:
       return new Kosa8BadRequestError(message, opts);

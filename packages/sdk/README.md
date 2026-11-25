@@ -30,7 +30,7 @@ export KOSA8_API_KEY=k8c_live_...
 ```ts
 import { Kosa8Cloud } from '@kosa8/sdk';
 
-const cloud = new Kosa8Cloud(); // reads KOSA8_API_KEY; talks to https://api.kosa8.com
+const cloud = new Kosa8Cloud(); // KOSA8_API_KEY, else your `kosa8 login` (~/.kosa8/cloud.json); talks to https://api.kosa8.com
 
 // Deleted automatically in an hour, even if this script dies.
 const box = await cloud.sandboxes.create({ ttlS: 3600 });

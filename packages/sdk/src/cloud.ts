@@ -1032,8 +1032,19 @@ export class Kosa8Cloud {
 
   constructor(options: Kosa8CloudOptions = {}) {
     const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
-    const key = (options.apiKey ?? env.KOSA8_API_KEY ?? '').trim();
-    if (!key) throw new Kosa8Error(`no kosa8 Cloud API key: set KOSA8_API_KEY or pass { apiKey }; make one at ${KEYS_URL}`);
+    let key = (options.apiKey ?? env.KOSA8_API_KEY ?? '').trim();
+    let savedUrl = '';
+    if (!key && options.apiKey === undefined) {
+      // Signed in with `kosa8 login`: the CLI keeps the key in ~/.kosa8/cloud.json.
+      const saved = savedLogin(env, options.env !== undefined);
+      key = saved.key;
+      savedUrl = saved.apiUrl;
+    }
+    if (!key) {
+      throw new Kosa8Error(
+        `no kosa8 Cloud API key: run \`kosa8 login\`, set KOSA8_API_KEY or pass { apiKey }; make one at ${KEYS_URL}`,
+      );
+    }
     if (!key.startsWith(CLOUD_KEY_PREFIX) && !key.startsWith(CLOUD_TOKEN_PREFIX)) {
       throw new Kosa8Error(
         `a kosa8 Cloud API key starts with ${CLOUD_KEY_PREFIX} (a capability token with ${CLOUD_TOKEN_PREFIX}); ` +
@@ -1041,7 +1052,7 @@ export class Kosa8Cloud {
       );
     }
     this.apiKey = key;
-    this.baseUrl = checkBase(options.baseUrl ?? env.KOSA8_CLOUD_URL ?? DEFAULT_CLOUD_URL);
+    this.baseUrl = checkBase(options.baseUrl ?? env.KOSA8_CLOUD_URL ?? (savedUrl || DEFAULT_CLOUD_URL));
     const f = options.fetch ?? globalThis.fetch;
     if (typeof f !== 'function') throw new Kosa8Error('no fetch available; pass options.fetch');
     this.fetchImpl = f;
@@ -2375,5 +2386,53 @@ export class CloudFunctions {
     const body: Json = { events };
     if (opts.concurrency !== undefined) body.concurrency = opts.concurrency;
     return this.cloud.request('POST', `/v1/functions/${encodeURIComponent(name)}/map`, body);
+  }
+}
+
+/**
+ * Where `kosa8 login` keeps the kosa8 Cloud key: `~/.kosa8/cloud.json`. With
+ * an explicit `env`, its `HOME` decides (none: no file). Undefined where
+ * there is no Node file system (browsers, Workers).
+ */
+export function cloudCredentialsPath(
+  env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {},
+  explicitEnv = false,
+): string | undefined {
+  const nodeOs = builtin<{ homedir(): string }>('node:os');
+  const nodePath = builtin<{ join(...p: string[]): string }>('node:path');
+  if (!nodePath) return undefined;
+  let home = env.HOME || env.USERPROFILE || '';
+  if (!home && !explicitEnv && nodeOs) {
+    try {
+      home = nodeOs.homedir();
+    } catch {
+      home = '';
+    }
+  }
+  return home ? nodePath.join(home, '.kosa8', 'cloud.json') : undefined;
+}
+
+function savedLogin(env: Record<string, string | undefined>, explicitEnv: boolean): { key: string; apiUrl: string } {
+  const none = { key: '', apiUrl: '' };
+  const fs = builtin<{ readFileSync(p: string, enc: string): string }>('node:fs');
+  const path = cloudCredentialsPath(env, explicitEnv);
+  if (!fs || !path) return none;
+  try {
+    const data = JSON.parse(fs.readFileSync(path, 'utf8')) as Record<string, unknown>;
+    const key = typeof data.key === 'string' ? data.key : typeof data.api_key === 'string' ? data.api_key : '';
+    const apiUrl = typeof data.api_url === 'string' ? data.api_url : '';
+    return { key: key.trim(), apiUrl: apiUrl.trim() };
+  } catch {
+    return none;
+  }
+}
+
+/** A Node built-in, loaded without a static import so `@kosa8/sdk/cloud` still bundles for browsers and Workers. */
+function builtin<T>(name: string): T | undefined {
+  const p = (globalThis as { process?: { getBuiltinModule?: (n: string) => unknown } }).process;
+  try {
+    return (p?.getBuiltinModule?.(name) as T | undefined) ?? undefined;
+  } catch {
+    return undefined;
   }
 }
