@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.4 - 2026-11-25
+
+- Accepts @kosa8/sdk 0.10 (`... || ^0.9.0 || ^0.10.0`), the release with Autopilot `cloud.bots` and `cloud.approvals`.
+
 ## 0.2.3 - 2026-11-24
 
 - Accepts @kosa8/sdk 0.9 (`^0.4.1 || ^0.5.0 || ^0.6.0 || ^0.7.0 || ^0.8.0 || ^0.9.0`); @kosa8/sdk 0.9.0 is the first release that sends `repo`.
