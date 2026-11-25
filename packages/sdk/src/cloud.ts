@@ -158,8 +158,16 @@ export interface CloudSandboxInfo {
   started_at: number | null;
   stopped_at: number | null;
   deleted_at: number | null;
-  /** Unix ms when it is deleted automatically; null for no limit. */
+  /** Unix ms of its timeout (`ttlS`); `on_timeout` says what then happens. null for none. */
   delete_after?: number | null;
+  /** What its timeout does: `sleep` keeps memory and files asleep, `delete` removes it. */
+  on_timeout?: CloudOnTimeout;
+  /** Its coming timeout, or null for none. */
+  timeout?: { at: number; in_s: number; action: CloudOnTimeout } | null;
+  /** Why it stopped running (one of `END_REASONS`); null while it runs. */
+  end_reason?: CloudEndReason | null;
+  /** Why and when it stopped running; null while it runs. A wake clears it. */
+  end?: CloudSandboxEnd | null;
   /** Idle seconds before it sleeps; 0 never. */
   sleep_after_s?: number | null;
   last_error: string | null;
@@ -189,6 +197,21 @@ export interface CloudSandboxInfo {
   [k: string]: unknown;
 }
 
+/** What a sandbox's timeout does. */
+export type CloudOnTimeout = 'sleep' | 'delete';
+/** Why a sandbox stopped running. */
+export const END_REASONS = ['timeout', 'idle', 'user', 'quota', 'org_max_lifetime', 'crash', 'host'] as const;
+export type CloudEndReason = (typeof END_REASONS)[number];
+/** Why and when a sandbox stopped running (`CloudSandboxInfo.end`). */
+export interface CloudSandboxEnd {
+  reason: CloudEndReason;
+  action: 'slept' | 'deleted' | 'stopped';
+  at: number | null;
+  detail: string | null;
+  /** One sentence for a person. */
+  message: string;
+}
+
 /** vCPU x GiB sizes a sized create takes (the standard size and up). */
 export const CLOUD_SIZES = ['2x4', '4x8', '8x16', '16x32'] as const;
 /**
@@ -210,10 +233,16 @@ export interface CloudCreateOptions {
   region?: string;
   /** Idle seconds before the sandbox sleeps (0..604800); 0 never. Defaults to the org's setting. */
   sleepAfterS?: number;
-  /** Delete it this many seconds from now (60..7776000). Not with `deleteAfter`. */
+  /** Its timeout, this many seconds from now (60..7776000); `onTimeout` says what happens then. Not with `deleteAfter`. */
   ttlS?: number;
-  /** Or delete it at this time (Unix ms or a Date). Not with `ttlS`. */
+  /** Or its timeout at this time (Unix ms or a Date). Not with `ttlS`. */
   deleteAfter?: number | Date;
+  /**
+   * What the timeout does: `sleep` keeps memory and files asleep (the default
+   * where the sandbox can sleep), `delete` removes it (the default for a lease,
+   * a batch, or a sandbox that never sleeps).
+   */
+  onTimeout?: CloudOnTimeout;
   /** A paid kosa8 Store item only: its current price in USD, which the person agreed to. */
   acceptPrice?: number;
   /**
@@ -436,6 +465,8 @@ export interface CloudUpdateOptions {
   deleteAfter?: number | Date | null;
   /** Idle seconds before it sleeps (0..604800); 0 never. */
   sleepAfterS?: number;
+  /** What its timeout does: `sleep` or `delete`. */
+  onTimeout?: CloudOnTimeout;
 }
 
 export interface CloudListOptions {
@@ -1461,6 +1492,11 @@ function actionableMessage(
   return `${m} [${parts.join('; ')}]`;
 }
 
+function checkOnTimeout(v: unknown): CloudOnTimeout {
+  if (v !== 'sleep' && v !== 'delete') throw new Kosa8Error("onTimeout must be 'sleep' (keep memory and files, asleep) or 'delete'");
+  return v;
+}
+
 function createBody(opts: CloudCreateOptions): Json {
   const body: Json = {};
   if (opts.ttlS !== undefined && opts.deleteAfter !== undefined) {
@@ -1477,6 +1513,7 @@ function createBody(opts: CloudCreateOptions): Json {
     body.ttl_s = opts.ttlS;
   }
   if (opts.deleteAfter !== undefined) body.delete_after = toMs(opts.deleteAfter);
+  if (opts.onTimeout !== undefined) body.on_timeout = checkOnTimeout(opts.onTimeout);
   if (opts.leaseS !== undefined) {
     if (opts.ttlS !== undefined || opts.deleteAfter !== undefined) {
       throw new Kosa8Error('give leaseS or ttlS/deleteAfter, not both: a lease is a TTL that heartbeats move forward');
@@ -1911,7 +1948,7 @@ export class CloudSandbox {
   }
 
   /**
-   * Change its lifetime or sleep timer. `{ ttlS: null }` (or
+   * Change its timeout, what the timeout does (`onTimeout`), or its sleep timer. `{ ttlS: null }` (or
    * `{ deleteAfter: null }`) clears the lifetime. Returns the server's notes,
    * if any; `info` is refreshed.
    */
@@ -1929,7 +1966,8 @@ export class CloudSandbox {
       checkInt('sleepAfterS', opts.sleepAfterS, 0, MAX_SLEEP_AFTER_S);
       body.sleep_after_s = opts.sleepAfterS;
     }
-    if (Object.keys(body).length === 0) throw new Kosa8Error('update needs ttlS, deleteAfter or sleepAfterS');
+    if (opts.onTimeout !== undefined) body.on_timeout = checkOnTimeout(opts.onTimeout);
+    if (Object.keys(body).length === 0) throw new Kosa8Error('update needs ttlS, deleteAfter, sleepAfterS or onTimeout');
     const r = await this.cloud.request<{ sandbox: CloudSandboxInfo; notes?: string[] }>('PATCH', this.path(), body);
     this.info = r.sandbox;
     return { sandbox: r.sandbox, notes: r.notes ?? [] };
