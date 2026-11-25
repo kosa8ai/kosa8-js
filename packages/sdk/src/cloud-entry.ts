@@ -127,7 +127,7 @@ export type {
   CloudGradeOptions,
   CloudGradeResult,
 } from './cloud.js';
-export { CLOUD_SIZES, SMALL_CLOUD_SIZES, SDK_VERSION, USER_AGENT } from './cloud.js';
+export { CLOUD_SIZES, END_REASONS, SMALL_CLOUD_SIZES, SDK_VERSION, USER_AGENT } from './cloud.js';
 export type { CloudSize } from './cloud.js';
 export {
   CloudBackgroundExec,

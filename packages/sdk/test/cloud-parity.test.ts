@@ -131,10 +131,27 @@ describe('CloudSandbox.update', () => {
     expect(seen[2]!.body).toEqual({ delete_after: 42 });
   });
 
+  it('sends onTimeout on create and update, and reads end and timeout back', async () => {
+    const { cloud, seen } = cloudWith((s) =>
+      s.method === 'PATCH'
+        ? [200, { sandbox: info({ on_timeout: 'delete' }) }]
+        : [201, { sandbox: info({ on_timeout: 'sleep', timeout: { at: 5, in_s: 60, action: 'sleep' }, end: null }) }]);
+    const box = await cloud.sandboxes.create({ ttlS: 60, onTimeout: 'sleep' });
+    expect(seen[0]!.body).toEqual({ ttl_s: 60, on_timeout: 'sleep' });
+    expect(box.info.timeout?.action).toBe('sleep');
+    expect(box.info.end).toBeNull();
+    await box.update({ onTimeout: 'delete' });
+    expect(seen[1]!.body).toEqual({ on_timeout: 'delete' });
+    expect(box.info.on_timeout).toBe('delete');
+    await expect(box.update({ onTimeout: 'pause' as never })).rejects.toBeInstanceOf(Kosa8Error);
+    await expect(cloud.sandboxes.create({ onTimeout: 'pause' as never })).rejects.toBeInstanceOf(Kosa8Error);
+    expect(seen).toHaveLength(2);
+  });
+
   it('refuses an empty or invalid update before any request', async () => {
     const { cloud, seen } = cloudWith(() => [200, { sandbox: info() }]);
     const box = new CloudSandbox(cloud, info());
-    await expect(box.update({})).rejects.toThrow(/ttlS, deleteAfter or sleepAfterS/);
+    await expect(box.update({})).rejects.toThrow(/ttlS, deleteAfter, sleepAfterS or onTimeout/);
     await expect(box.update({ ttlS: 10 })).rejects.toThrow(/ttlS/);
     await expect(box.update({ ttlS: 600, deleteAfter: 1 })).rejects.toThrow(/not both/);
     expect(seen).toHaveLength(0);
