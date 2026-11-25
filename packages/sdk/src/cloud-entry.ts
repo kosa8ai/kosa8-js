@@ -143,6 +143,7 @@ export {
 export type {
   CloudBackgroundExecInfo,
   CloudWaitOptions,
+  CloudFollowOptions,
   CloudSnapshot,
   CloudPreview,
   CloudPreviewOptions,
