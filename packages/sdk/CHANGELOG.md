@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `new Kosa8Cloud()` with no `apiKey` and no `KOSA8_API_KEY` uses the key `kosa8 login` keeps in `~/.kosa8/cloud.json` (and its `api_url` unless `KOSA8_CLOUD_URL` or `baseUrl` is set), on Node 20.16+/22.3+; `@kosa8/sdk/cloud` still has no static Node import. The "no API key" error names `kosa8 login`.
+- A plan limit answered with HTTP 429 (Starter's running limit, `starter_limit`) throws the new `Kosa8PlanLimitError`, a `Kosa8PaymentRequiredError` like every other plan limit, which still passes `instanceof Kosa8RateLimitError`. It is not retried.
+
 ## 0.10.0 - 2026-11-25
 
 - Autopilot bots: `cloud.bots` with `list()` (`bots`, `paused_all`, `pending_approvals`), `templates()`, `template(id)`, `plan({ template | spec, name, replay })`, `compile(text)` (at most 500 characters, checked before sending), `create({ template | spec, name, sponsor, budgetUsd, scope, notify })` (exactly one of template or spec; starts as a draft), `get`, `update`, `delete`, `enable`, `disable`, `run(id, { dryRun })` (a dry run by default), `runs(id, { limit })`, `getRun`, `cancelRun`, `undoStep(runId, key)`, `pauseAll()`, `resumeAll()`.
