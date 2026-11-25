@@ -3,6 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { CLOUD_SIZES, Kosa8Cloud, Kosa8Error, Kosa8TimeoutError, pipelineRunDone } from '../src/index.js';
 import type { CloudSandboxInfo, CloudSnapshot } from '../src/index.js';
+import { CloudBackgroundExec } from '../src/cloud-features.js';
+import type { CloudRequester } from '../src/cloud-features.js';
 
 const KEY = 'k8c_live_testkey';
 
@@ -349,5 +351,46 @@ describe('pipelines', () => {
     await cloud.pipelines.hooks.list();
     await cloud.pipelines.hooks.delete('hk_1');
     expect(seen.map(route)).toEqual(['POST /v1/pipelines/hooks', 'GET /v1/pipelines/hooks', 'DELETE /v1/pipelines/hooks/hk_1']);
+  });
+});
+
+const jobOf = (cloud: Kosa8Cloud) => new CloudBackgroundExec(cloud as unknown as CloudRequester, '/v1/sandboxes/sbx_1', {
+  id: 'bg_1', sandbox_id: 'sbx_1', state: 'running', pid: null, exit: null, output_path: null, exit_path: null,
+});
+
+describe('background exec output from an offset', () => {
+  const FULL = 'one\ntwo\nthree\n';
+  // The command writes a line a read; read 2 fails (502); it exits after read 4 (exit 3).
+  const api = () => {
+    let n = 0;
+    return (s: Seen): Answer => {
+      n++;
+      if (n === 2) return [502, { error: 'host_failed', message: 'tunnel' }];
+      const off = Number(s.url.searchParams.get('offset'));
+      const written = ({ 1: 4, 3: 8 } as Record<number, number>)[n] ?? FULL.length;
+      const end = Math.min(written, off + 5);
+      const done = n >= 4;
+      return [200, { exec: { id: 'bg_1', sandbox_id: 'sbx_1', state: done ? 'exited' : 'running', pid: 7, exit: done ? 3 : null,
+        output_path: 'x', exit_path: 'y', output: FULL.slice(off, end), next_offset: end, output_more: end < written } }];
+    };
+  };
+
+  it('follow() yields all output once, reading again from the same byte after a failed read', async () => {
+    const { cloud, seen } = cloudWith(api());
+    const job = jobOf(cloud);
+    let got = '';
+    for await (const t of job.follow({ intervalMs: 0 })) got += t;
+    expect(got).toBe(FULL);
+    expect(job.info.exit).toBe(3);
+    expect(seen.slice(0, 3).map((s) => s.url.searchParams.get('offset'))).toEqual(['0', '4', '4']);
+  });
+
+  it('read() checks the offset, and a refusal is not retried', async () => {
+    const { cloud, seen } = cloudWith(() => [404, { error: 'not_found', message: 'no such background command' }]);
+    const job = jobOf(cloud);
+    await expect(job.read(-1)).rejects.toThrow(/offset/);
+    const it = job.follow({ intervalMs: 0 });
+    await expect(it.next()).rejects.toBeInstanceOf(Kosa8Error);
+    expect(seen.length).toBe(1);
   });
 });

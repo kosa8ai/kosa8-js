@@ -8,7 +8,7 @@
  * as the API sends them).
  */
 
-import { Kosa8Error, Kosa8TimeoutError } from './errors.js';
+import { Kosa8Error, Kosa8PaymentRequiredError, Kosa8TimeoutError } from './errors.js';
 import { CloudPreviewDomains } from './cloud-more.js';
 
 type Json = Record<string, unknown>;
@@ -62,6 +62,33 @@ export interface CloudBackgroundExecInfo {
   stopped?: boolean;
   /** It was ended because its `timeoutS` ran out. */
   timed_out?: boolean;
+  /** With an offset read: the byte the output started at. */
+  output_offset?: number;
+  /** With an offset read: where to read next (bytes); after a lost connection, read again from here. */
+  next_offset?: number;
+  /** With an offset read: the output's length in bytes so far. */
+  output_size?: number;
+  /** With an offset read: more output is there past `next_offset` now. Complete when `state` is `exited` and this is false. */
+  output_more?: boolean;
+}
+
+export interface CloudFollowOptions {
+  /** Start at this byte of the output (a `next_offset` from an earlier read). Default 0. */
+  offset?: number;
+  /** Give up after this long. Default 1 hour. */
+  timeoutMs?: number;
+  /** Time between reads while nothing new is there. Default 1 s. */
+  intervalMs?: number;
+  /** Failed reads in a row (lost connection, 5xx, 429) tried again from the same byte. Default 5. */
+  retries?: number;
+}
+
+// retryable: a lost connection (no status), a 5xx or a 429; never a plan
+// limit (a payment error, even as a 429).
+function retryable(e: unknown): boolean {
+  if (e instanceof Kosa8PaymentRequiredError) return false;
+  const status = (e as { status?: number } | null)?.status;
+  return status === undefined || status === null || status === 0 || status === 429 || status >= 500;
 }
 
 export interface CloudWaitOptions {
@@ -105,6 +132,57 @@ export class CloudBackgroundExec {
       'POST', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/exec/${enc(this.info.id)}/stop`, {},
     );
     return { id: r.exec?.id ?? this.info.id, state: r.exec?.state ?? 'stopping' };
+  }
+
+  /**
+   * Its output from byte `offset` (at most `limit` bytes, default and most
+   * 1 MiB): `output`, `next_offset`, `output_more`, and `state`/`exit`. Read
+   * again from `next_offset` after a lost connection: nothing is missed or
+   * repeated.
+   */
+  async read(offset = 0, opts: { limit?: number } = {}): Promise<CloudBackgroundExecInfo> {
+    if (!Number.isInteger(offset) || offset < 0) throw new Kosa8Error('offset must be a whole number of bytes, 0 or more');
+    const q = `offset=${offset}${opts.limit !== undefined ? `&limit=${opts.limit}` : ''}`;
+    const r = await this.cloud.request<{ exec: CloudBackgroundExecInfo }>(
+      'GET', `/v1/sandboxes/${sandboxIdOf(this.sandboxPath)}/exec/${enc(this.info.id)}?${q}`,
+    );
+    this.info = { ...this.info, ...r.exec };
+    return r.exec;
+  }
+
+  /**
+   * Yields its output as it is written until it exits and all of it has been
+   * read (then `info.exit` is its exit code). A read that fails with a lost
+   * connection, a 5xx or a 429 is tried again from the same byte.
+   *
+   *     for await (const text of job.follow()) process.stdout.write(text);
+   */
+  async *follow(opts: CloudFollowOptions = {}): AsyncGenerator<string, void, undefined> {
+    let offset = opts.offset ?? 0;
+    const deadline = Date.now() + (opts.timeoutMs ?? 3_600_000);
+    const every = opts.intervalMs ?? 1000;
+    const retries = opts.retries ?? 5;
+    let failed = 0;
+    for (;;) {
+      let r: CloudBackgroundExecInfo | null = null;
+      try {
+        r = await this.read(offset);
+        failed = 0;
+      } catch (e) {
+        if (!retryable(e) || failed >= retries) throw e;
+        failed++;
+      }
+      if (r) {
+        if (r.output) yield r.output;
+        offset = r.next_offset ?? offset;
+        if (r.output_more) continue;
+        if (r.state === 'exited') return;
+      }
+      if (Date.now() + every > deadline) {
+        throw new Kosa8TimeoutError(`background command ${this.info.id} still running (read up to byte ${offset}; go on with follow({ offset: ${offset} }))`);
+      }
+      await sleepMs(every);
+    }
   }
 
   /** Poll until it exits; resolves with its final status (exit code and output). */

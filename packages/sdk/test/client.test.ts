@@ -190,6 +190,16 @@ describe('run and exec', () => {
     expect(JSON.parse(d.requests[0]!.body)).toEqual({ image: 'alpine', args: ['cat', '/x'], env: ['A=1'] });
   });
 
+  it('never takes a final frame with neither ok nor an error for exit 0', async () => {
+    d.on('POST', '/kosa8/v1/sandboxes/{id}/run', (_r, res) =>
+      frames(res, [{ stream: 'stdout', data: 'half' }, { done: true }]),
+    );
+    const err = await client.run('web', 'alpine').catch((e) => e);
+    expect(err).toBeInstanceOf(Kosa8StreamError);
+    expect(err.message).toMatch(/without a result/);
+    expect(err.stdout).toBe('half');
+  });
+
   it('throws Kosa8StreamError on an error frame, keeping partial output', async () => {
     d.on('POST', '/kosa8/v1/sandboxes/{id}/run', (_r, res) =>
       frames(res, [{ stream: 'stdout', data: 'partial' }, { done: true, error: 'image not found: nope' }]),

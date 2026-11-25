@@ -4,6 +4,9 @@
 
 - `new Kosa8Cloud()` with no `apiKey` and no `KOSA8_API_KEY` uses the key `kosa8 login` keeps in `~/.kosa8/cloud.json` (and its `api_url` unless `KOSA8_CLOUD_URL` or `baseUrl` is set), on Node 20.16+/22.3+; `@kosa8/sdk/cloud` still has no static Node import. The "no API key" error names `kosa8 login`.
 - A plan limit answered with HTTP 429 (Starter's running limit, `starter_limit`) throws the new `Kosa8PlanLimitError`, a `Kosa8PaymentRequiredError` like every other plan limit, which still passes `instanceof Kosa8RateLimitError`. It is not retried.
+- Background commands: `job.read(offset, { limit })` reads the output from a byte offset (`output`, `next_offset`, `output_more`), and `job.follow({ offset })` yields all of it as it is written until the command exits (`job.info.exit` then), reading again from the same byte after a lost connection, a 5xx or a 429.
+- A streamed cloud exec that the API ends with `code: 'stream_interrupted'` throws `Kosa8StreamError` with that code and no exit code (it was already never reported as complete).
+- Local runs (and `@kosa8/ai-sdk-sandbox` spawn and file reads): a final frame from kosa8d with neither `ok` nor an error now throws instead of passing for exit 0.
 
 ## 0.10.0 - 2026-11-25
 

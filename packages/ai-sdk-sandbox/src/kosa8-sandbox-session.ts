@@ -156,6 +156,8 @@ export class Kosa8SandboxSession implements SandboxSession {
           const f = r.value;
           if (f.done) {
             if (f.error) throw new Kosa8StreamError(f.error, { stdout: '', stderr: '' }, { daemonMessage: f.error });
+            // Only ok is a result (exit is left out when 0): never exit 0 from a frame without it.
+            if (!f.ok) throw new Kosa8StreamError('exec stream ended without a result (no ok, no error)', { stdout: '', stderr: '' });
             return { exitCode: typeof f.exit === 'number' ? f.exit : 0 };
           }
           if (f.data) {
@@ -246,6 +248,7 @@ export class Kosa8SandboxSession implements SandboxSession {
             // As in spawn: close the generator so the response is destroyed.
             await iter.return?.(undefined).catch(() => undefined);
             if (f.error) ctl.error(new Error(`reading ${abs}: ${f.error}`));
+            else if (!f.ok) ctl.error(new Error(`reading ${abs}: the stream ended without a result`));
             else if (f.exit) ctl.error(new Error(`reading ${abs}: ${stderr.trim() || `exit ${f.exit}`}`));
             else ctl.close();
             return;

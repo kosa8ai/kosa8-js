@@ -1085,6 +1085,14 @@ export class Kosa8Client {
             stderr: stderrBytes.toString('utf8'),
           }, { daemonMessage: f.error });
         }
+        // Only ok is a result (exit is left out when 0): a final frame with
+        // neither ok nor an error is never taken for exit 0.
+        if (!f.ok) {
+          throw new Kosa8StreamError('the stream ended without a result (no ok, no error)', {
+            stdout: stdoutBytes.toString('utf8'),
+            stderr: stderrBytes.toString('utf8'),
+          });
+        }
         return {
           exitCode: typeof f.exit === 'number' ? f.exit : 0,
           stdout: stdoutBytes.toString('utf8'),
