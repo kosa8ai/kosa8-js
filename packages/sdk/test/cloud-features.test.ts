@@ -137,6 +137,23 @@ describe('background exec', () => {
     expect(route(seen[2]!)).toBe('GET /v1/sandboxes/sbx_1/exec/bg_1');
   });
 
+  it('keeps the id and pid a status read answers as null', async () => {
+    // The host's status read has no pid, and the API answers what it lacks as null.
+    const { cloud, seen } = cloudWith((s) => {
+      if (s.url.pathname === '/v1/sandboxes/sbx_1') return [200, { sandbox: info() }];
+      if (s.url.pathname.endsWith('/stop')) return [200, { exec: { id: 'bg_1', state: 'stopping' } }];
+      if (s.method === 'POST') return [202, { exec: { id: 'bg_1', sandbox_id: 'sbx_1', state: 'running', pid: 7, exit: null, output_path: '/o', exit_path: '/e' } }];
+      return [200, { exec: { id: null, sandbox_id: 'sbx_1', state: 'running', pid: null, exit: null, output_path: null, exit_path: null } }];
+    });
+    const box = await boxOf(cloud);
+    const job = await box.execBackground('sleep 9');
+    const st = await job.status();
+    expect([st.id, st.pid, st.output_path, st.exit_path]).toEqual(['bg_1', 7, '/o', '/e']);
+    expect(job.id).toBe('bg_1');
+    await job.stop();
+    expect(route(seen[seen.length - 1]!)).toBe('POST /v1/sandboxes/sbx_1/exec/bg_1/stop');
+  });
+
   it('times out waiting, and getExec reads one by id', async () => {
     const { cloud } = cloudWith((s) =>
       s.url.pathname === '/v1/sandboxes/sbx_1' ? [200, { sandbox: info() }]

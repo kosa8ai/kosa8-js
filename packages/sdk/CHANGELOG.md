@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Background commands: `job.status()` and `job.read()` keep the `id`, `pid`, `output_path` and `exit_path` the start answered when a later read answers them as null (the status read carries no pid); before, `status()` replaced `job.info` whole.
+- README: secret names are lower case (`openai`, `npm-token`); kosa8 Cloud refuses `OPENAI` with 400 `invalid_secret`.
+
 ## 0.11.0 - 2026-11-25
 
 - Lifetime contract: `onTimeout` (`'sleep'` or `'delete'`) on `cloud.sandboxes.create` and `box.update`, checked before sending; kosa8 Cloud now puts a sandbox to sleep at its timeout by default where it can sleep. `CloudSandboxInfo` gains `on_timeout`, `timeout` (`{ at, in_s, action }`), `end` (`reason`, `action`, `at`, `detail`, `message`) and `end_reason` (one of the exported `END_REASONS`: timeout, idle, user, quota, org_max_lifetime, crash, host).
